@@ -494,29 +494,8 @@ where
         client_id: &ClientId,
         operations: Vec<Storage::Operation>,
     ) -> Result<(), RoomError> {
-        // First get the client's current room
-        let room_id = {
-            let client_rooms_guard = self.client_rooms.read().await;
-            client_rooms_guard
-                .get(client_id)
-                .cloned()
-                .ok_or_else(|| {
-                    tracing::error!(%client_id, "Client not in any room when updating storage");
-                    RoomError::UserNotInRoom(client_id.to_string())
-                })?
-        };
-
-        // Then get the room and apply the update
-        let room = {
-            let rooms_guard = self.rooms.read().await;
-            rooms_guard
-                .get(&room_id)
-                .cloned()
-                .ok_or_else(|| {
-                    tracing::error!(%client_id, %room_id, "Room not found when updating storage");
-                    RoomError::RoomNotFound(room_id.to_string())
-                })?
-        };
+        let room_id = self.get_client_room_id(client_id).await?;
+        let room = self.get_room(&room_id).await?;
 
         // Apply storage operations and collect successful ones
         let mut storage = room.storage.write().await;
@@ -536,14 +515,15 @@ where
         // Only broadcast if we have successful operations
         if !applied_ops.is_empty() {
             tracing::debug!(%client_id, %room_id, operation_count = applied_ops.len(), "Broadcasting storage update");
-            room.broadcast(ServerMessageType::StorageUpdated {
-                version: storage.version(),
-                operations: applied_ops,
-            })
-            .map_err(|e| {
-                tracing::error!(%client_id, %room_id, error = %e, "Failed to broadcast storage update");
-                RoomError::MessageSendFail(Box::new(e))
-            })?;
+            self.broadcast_message(
+                &room,
+                ServerMessageType::StorageUpdated {
+                    version: storage.version(),
+                    operations: applied_ops,
+                },
+                client_id,
+                &room_id,
+            ).await?;
         }
 
         Ok(())
@@ -560,15 +540,7 @@ where
                 self.join_room_internal(&room_id, client_id).await
             },
             ClientMessageType::LeaveRoom => {
-                // Get the client's current room
-                let room_id = {
-                    let client_rooms_guard = self.client_rooms.read().await;
-                    client_rooms_guard
-                        .get(client_id)
-                        .cloned()
-                        .ok_or_else(|| RoomError::UserNotInRoom(client_id.to_string()))?
-                };
-                
+                let room_id = self.get_client_room_id(client_id).await?;
                 tracing::info!(%client_id, %room_id, "Client leaving room");
                 self.leave_room_internal(&room_id, client_id).await
             },
@@ -583,38 +555,13 @@ where
                 Ok(())
             },
             _ => {
-                // For other messages, get the client's current room
-                let room_id = {
-                    let client_rooms_guard = self.client_rooms.read().await;
-                    client_rooms_guard
-                        .get(client_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            tracing::error!(%client_id, "Client not in any room");
-                            RoomError::UserNotInRoom(client_id.to_string())
-                        })?
-                };
-
-                let room = {
-                    let rooms_guard = self.rooms.read().await;
-                    rooms_guard
-                        .get(&room_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            tracing::error!(%client_id, %room_id, "Room not found");
-                            RoomError::RoomNotFound(room_id.to_string())
-                        })?
-                };
+                let room_id = self.get_client_room_id(client_id).await?;
+                let room = self.get_room(&room_id).await?;
 
                 tracing::debug!(%client_id, %room_id, ?message, "Processing client message");
-                // Process the message
                 if let Some(server_msg) = room.process_client_message(client_id, message).await? {
                     tracing::debug!(%client_id, %room_id, ?server_msg, "Broadcasting server message");
-                    room.broadcast(server_msg)
-                        .map_err(|e| {
-                            tracing::error!(%client_id, %room_id, error = %e, "Failed to broadcast message");
-                            RoomError::MessageSendFail(Box::new(e))
-                        })?;
+                    self.broadcast_message(&room, server_msg, client_id, &room_id).await?;
                 }
 
                 Ok(())
@@ -699,26 +646,12 @@ where
         room_id: &RoomId,
         client_id: &ClientId,
     ) -> Result<(), RoomError> {
-        let room = {
-            let rooms_guard = self.rooms.read().await;
-            rooms_guard
-                .get(room_id)
-                .cloned()
-                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
-        };
-
-        let user_sender = {
-            let user_channels_guard = self.user_channels.read().await;
-            user_channels_guard
-                .get(client_id)
-                .cloned()
-                .ok_or_else(|| RoomError::UserNotInitialized(client_id.to_string()))?
-        };
+        let room = self.get_room(room_id).await?;
+        let user_sender = self.get_user_sender(client_id).await?;
 
         // Update client_rooms mapping
         {
             let mut client_rooms_guard = self.client_rooms.write().await;
-            // Check if client is already in a room
             if let Some(old_room_id) = client_rooms_guard.get(client_id) {
                 return Err(RoomError::UserAlreadyInRoom(
                     client_id.to_string(),
@@ -780,13 +713,7 @@ where
         room_id: &RoomId,
         client_id: &ClientId,
     ) -> Result<(), RoomError> {
-        let room = {
-            let rooms_guard = self.rooms.read().await;
-            rooms_guard
-                .get(room_id)
-                .cloned() // Clone Arc<Room>
-                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
-        }; // rooms_guard lock released here
+        let room = self.get_room(room_id).await?;
 
         // Remove from client_rooms mapping
         {
@@ -794,12 +721,11 @@ where
             client_rooms_guard.remove(client_id);
         }
 
-        // Check if user channel still exists, though it should if the handle is valid
+        // Check if user channel still exists
         if !self.user_channels.read().await.contains_key(client_id) {
             return Err(RoomError::UserNotInitialized(client_id.to_string()));
         }
 
-        // Leave the specific room (acquires write lock on room.clients)
         room.leave(client_id).await;
         Ok(())
     }
@@ -811,16 +737,7 @@ where
         room_id: &RoomId,
         message: ServerMessageType<RoomId, ClientId, Presence, Storage>,
     ) -> Result<usize, RoomError> {
-        let room = {
-            // Scope for read lock
-            let rooms_guard = self.rooms.read().await;
-            rooms_guard
-                .get(room_id)
-                .cloned()
-                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
-        }; // rooms_guard lock released here
-
-        // Broadcast the message
+        let room = self.get_room(room_id).await?;
         room.broadcast(message)
             .map_err(|e| RoomError::MessageSendFail(Box::new(e)))
     }
@@ -905,6 +822,49 @@ where
     // Add new method to get a client's current room
     pub async fn get_client_room(&self, client_id: &ClientId) -> Option<RoomId> {
         self.client_rooms.read().await.get(client_id).cloned()
+    }
+
+    /// Helper method to get a room by ID with proper error handling
+    async fn get_room(&self, room_id: &RoomId) -> Result<Arc<Room<RoomId, ClientId, Presence, Storage>>, RoomError> {
+        let rooms_guard = self.rooms.read().await;
+        rooms_guard
+            .get(room_id)
+            .cloned()
+            .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))
+    }
+
+    /// Helper method to get a client's current room ID
+    async fn get_client_room_id(&self, client_id: &ClientId) -> Result<RoomId, RoomError> {
+        let client_rooms_guard = self.client_rooms.read().await;
+        client_rooms_guard
+            .get(client_id)
+            .cloned()
+            .ok_or_else(|| RoomError::UserNotInRoom(client_id.to_string()))
+    }
+
+    /// Helper method to get a user's sender channel
+    async fn get_user_sender(&self, client_id: &ClientId) -> Result<broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>, RoomError> {
+        let user_channels_guard = self.user_channels.read().await;
+        user_channels_guard
+            .get(client_id)
+            .cloned()
+            .ok_or_else(|| RoomError::UserNotInitialized(client_id.to_string()))
+    }
+
+    /// Helper method to broadcast a message with proper error handling
+    async fn broadcast_message(
+        &self,
+        room: &Arc<Room<RoomId, ClientId, Presence, Storage>>,
+        message: ServerMessageType<RoomId, ClientId, Presence, Storage>,
+        client_id: &ClientId,
+        room_id: &RoomId,
+    ) -> Result<(), RoomError> {
+        room.broadcast(message)
+            .map_err(|e| {
+                tracing::error!(%client_id, %room_id, error = %e, "Failed to broadcast message");
+                RoomError::MessageSendFail(Box::new(e))
+            })?;
+        Ok(())
     }
 }
 
