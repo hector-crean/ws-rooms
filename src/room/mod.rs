@@ -1,462 +1,584 @@
+pub mod message;
+pub mod client_state;
+pub mod presence;
+pub mod storage;
+
 use std::{
     collections::HashMap,
     error::Error,
     fmt,
-    sync::atomic::{AtomicU32, Ordering},
+    fmt::Display,
+    hash::Hash,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, // Added Arc for potential shared ownership if needed
+    },
+    time::{Duration, Instant},
 };
 
+use client_state::ClientState;
+use presence::PresenceLike;
+use storage::StorageLike;
 use tokio::{
-    sync::{RwLock, broadcast},
+    sync::{broadcast, RwLock},
     task::JoinHandle,
 };
 
-static CHANNEL_SIZE: usize = 100;
+use chrono::{DateTime, Utc};
 
-/// each room has a name and it contains `broadcast::sender<String>` which can be accessed
-/// by `get_sender` method and you can send message to a roome by calling `send` on room.
-/// each room counts how many user it has and there is a method to check if its empty
-/// each room track its joined users and stores spawned tasks handlers
-struct Room<K, U, T> {
-    name: K,
-    tx: broadcast::Sender<T>,
-    inner_user: RwLock<HashMap<U, UserTask>>,
-    user_count: AtomicU32,
-}
 
-/// struct that contains task handler that forwards messages
-struct UserTask {
-    task: JoinHandle<()>,
-}
 
-/// use in combination with `Arc` to share it between threads
-///
-/// internally it uses `RwLock` so it can handle concurrent requests without a problem
-///
-/// when a user connects to ws endpoint you have to call `init_user` and it gives you a guard that
-/// when dropped will remove user from all rooms
-///
-/// # Generics
-/// `K` is type used to identify each room
-///
-/// `U` is type used to identify each user
-///
-/// `T` is message type that is sent between rooms and users
-/// # Examples
-///
-/// ```rust
-/// use axum_ws_rooms::RoomsManager;
-///
-/// type Manager = RoomsManager<i32, i32, String>;
-///
-/// #[tokio::main]
-/// async fn main() {
-///     // init manager
-///     let manager = std::sync::Arc::new(Manager::new());
-///
-///     // create two rooms
-///     manager.new_room(1, None).await;
-///     manager.new_room(2, None).await;
-///
-///     // spawn a task that acts as a receiver
-///     let receiver = tokio::spawn({
-///         let manager = manager.clone();
-///
-///         async move {
-///             // initialise a user and join room 1 and start receiving messages
-///             let mut receiver = manager.init_user(1, None).await;
-///
-///             let _ = manager.join_room(1, 1).await;
-///
-///             while let Ok(data) = receiver.recv().await {
-///                 println!("received data `{}`", data);
-///             }
-///         }
-///     });
-///
-///     // spawn a task that acts as sender
-///     let sender = tokio::spawn({
-///         let manager = manager.clone();
-///
-///         async move {
-///             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-///
-///             let _ = manager
-///                 .send_message_to_room(&1, "test message to room 1".into())
-///                 .await;
-///
-///             let _ = manager
-///                 .send_message_to_room(&2, "test message to room 2".into())
-///                 .await;
-///         }
-///     });
-///
-///     let _ = tokio::join!(sender, receiver);
-/// }
-/// ```
-pub struct RoomsManager<K, U, T> {
-    inner: RwLock<HashMap<K, Room<K, U, T>>>,
-    user_reciever: RwLock<HashMap<U, broadcast::Sender<T>>>,
-}
 
-#[derive(Debug)]
+
+
+const DEFAULT_CHANNEL_CAPACITY: usize = 100;
+
+// --- Error Enum ---
+
+
+#[derive(thiserror::Error, Debug)]
 pub enum RoomError {
-    /// room does not exists
-    RoomNotFound,
-    /// can not send message to room
-    MessageSendFail,
-    /// you have not called init_user
-    NotInitiated,
+    #[error("Target room '{0}' not found")]
+    RoomNotFound(String), // Can include the RoomId if it's Display
+
+    #[error("User '{0}' has not been initialized or is already disconnected")]
+    UserNotInitialized(String), // Can include ClientId if it's Display
+
+    #[error("User '{0}' is already subscribed")]
+    UserAlreadySubscribed(String), // For the new subscribe API
+
+    #[error("Failed to send message: {0}")]
+    MessageSendFail(#[from] Box<dyn std::error::Error + Send + Sync>),
+
+    // Optional: Add specific internal errors if needed
+    #[error("Internal lock poisoned: {0}")]
+    LockPoisoned(String),
+
+    #[error("Failed to forward message to user channel")]
+    UserSendFail, // Keep this if the forwarding task needs to signal failure, though often just stopping is enough.
 }
 
-impl Error for RoomError {}
 
-impl fmt::Display for RoomError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RoomError::RoomNotFound => {
-                write!(f, "target room not found")
-            }
-            RoomError::NotInitiated => {
-                write!(f, "user is not initiated")
-            }
-            RoomError::MessageSendFail => {
-                write!(f, "failed to send message to the room")
-            }
-        }
-    }
-}
 
-/// guard that cntains users receiver
-///
-/// when this guard drops it also removes the associated user from all rooms
-pub struct UserReceiverGuard<'a, K, U, T>
+
+
+// --- Room Structure ---
+
+/// Represents a single chat room or broadcast group.
+#[derive(Debug)]
+struct Room<ClientId, MessageType, Presence, Storage>
 where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static,
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence:  PresenceLike,
+    Storage: StorageLike,
 {
-    receiver: broadcast::Receiver<T>,
-    user: U,
-    manager: &'a RoomsManager<K, U, T>,
+    // Room identifier is implicitly the key in the RoomsManager map.
+    // room_id: RoomId, // Removed, key in manager's map is sufficient
+    sender: broadcast::Sender<MessageType>,
+    clients: RwLock<HashMap<ClientId, ClientState<Presence>>>,
+    subscriber_count: AtomicU32, // Renamed from user_count
+    storage: RwLock<Storage>
 }
 
-impl<K, U, T> Room<K, U, T>
+impl<ClientId, MessageType, Presence, Storage> Room<ClientId, MessageType, Presence, Storage>
 where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash,
-    U: Eq + std::hash::Hash,
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static,
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence:  PresenceLike,
+    Storage: StorageLike,
 {
-    /// creates new room with a given name
-    /// capacity is the underlying channel capacity and its default is 100
-    fn new(name: K, capacity: Option<usize>) -> Room<K, U, T> {
-        let (tx, _rx) = broadcast::channel(capacity.unwrap_or(CHANNEL_SIZE));
-
+    /// Creates a new room with a specific broadcast channel capacity.
+    fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
         Room {
-            name,
-            tx,
-            inner_user: RwLock::new(HashMap::new()),
-            user_count: AtomicU32::new(0),
+            sender,
+            clients: RwLock::new(HashMap::new()),
+            subscriber_count: AtomicU32::new(0),
+            storage: RwLock::new(Storage::default()),
         }
     }
 
-    /// join the rooms with a unique user
-    /// if user has joined before, it does nothing
-    async fn join(&self, user: U, user_sender: broadcast::Sender<T>) {
-        let mut inner = self.inner_user.write().await;
+    /// Adds a client to the room, spawning a task to forward messages.
+    /// The `client_sender` is the sender part of the specific client's broadcast channel.
+    async fn join(&self, client_id: ClientId, client_sender: broadcast::Sender<MessageType>) {
+        let mut clients_guard = self.clients.write().await;
 
-        match inner.entry(user) {
-            std::collections::hash_map::Entry::Occupied(_) => {}
-            std::collections::hash_map::Entry::Vacant(data) => {
-                let mut room_rec = self.get_sender().subscribe();
+        // Avoid joining if already present
+        if clients_guard.contains_key(&client_id) {
+            return;
+        }
 
-                let task = tokio::spawn(async move {
-                    while let Ok(data) = room_rec.recv().await {
-                        let _ = user_sender.send(data);
+        let mut room_receiver = self.sender.subscribe();
+        let client_id_clone = client_id.clone(); // Clone for the task
+
+        let task_handle = tokio::spawn(async move {
+            loop {
+                match room_receiver.recv().await {
+                    Ok(message) => {
+                        // If sending to the client fails, it likely means the client disconnected
+                        // or their channel is full/closed. Stop forwarding for this client.
+                        if client_sender.send(message).is_err() {
+                            // Optional: Log this failure
+                            // eprintln!("Failed to forward message to client {}", client_id_clone);
+                            break;
+                        }
                     }
-                });
-
-                data.insert(UserTask { task });
-
-                self.user_count.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-    }
-
-    /// leave the room with user
-    /// if user has left before it wont do anything
-    async fn leave(&self, user: U) {
-        let mut inner = self.inner_user.write().await;
-
-        match inner.entry(user) {
-            std::collections::hash_map::Entry::Vacant(_) => {}
-            std::collections::hash_map::Entry::Occupied(data) => {
-                let data = data.remove();
-
-                data.task.abort();
-
-                self.user_count.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-    }
-
-    fn blocking_leave(&self, user: U) {
-        let mut inner = self.inner_user.blocking_write();
-
-        match inner.entry(user) {
-            std::collections::hash_map::Entry::Vacant(_) => {}
-            std::collections::hash_map::Entry::Occupied(data) => {
-                let data = data.remove();
-
-                data.task.abort();
-
-                self.user_count.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-    }
-
-    async fn clear_tasks(&self) {
-        let mut inner = self.inner_user.write().await;
-
-        inner.values().for_each(|value| {
-            value.task.abort();
-        });
-
-        inner.clear();
-
-        self.user_count.store(0, Ordering::SeqCst);
-    }
-
-    /// check if user is in the room
-    async fn contains_user(&self, user: &U) -> bool {
-        let inner = self.inner_user.read().await;
-
-        inner.contains_key(user)
-    }
-
-    /// checks if room is empty
-    fn is_empty(&self) -> bool {
-        self.user_count.load(Ordering::SeqCst) == 0
-    }
-
-    /// get sender without joining room
-    fn get_sender(&self) -> broadcast::Sender<T> {
-        self.tx.clone()
-    }
-
-    ///send message to room
-    fn send(&self, data: T) -> Result<usize, broadcast::error::SendError<T>> {
-        self.tx.send(data)
-    }
-
-    /// get user count of room
-    async fn user_count(&self) -> u32 {
-        self.user_count.load(Ordering::SeqCst)
-    }
-}
-
-impl<K, U, T> RoomsManager<K, U, T>
-where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
-{
-    /// create a room manager
-    /// you can use it with combination of `Arc` to share it between threads
-    /// # Example
-    /// ```rust
-    /// let manager = std::sync::Arc::new(RoomsManager::<i32, i32, String>::new());
-    /// ```
-    pub fn new() -> Self {
-        RoomsManager {
-            inner: RwLock::new(HashMap::new()),
-            user_reciever: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// creates a new room with given name
-    /// capacity is the underlying channels capacity and is set to `100` by default
-    pub async fn new_room(&self, name: K, capacity: Option<usize>) {
-        let mut rooms = self.inner.write().await;
-
-        rooms.insert(name.clone(), Room::new(name, capacity));
-    }
-
-    /// checks if given room exists
-    pub async fn room_exists(&self, name: &K) -> bool {
-        let rooms = self.inner.read().await;
-
-        rooms.get(name).is_some()
-    }
-
-    /// joins specified user into room if it exists or creates a new room and joins immediately
-    pub async fn join_or_create(&self, user: U, room: K) -> Result<(), RoomError> {
-        match self.room_exists(&room).await {
-            true => self.join_room(room, user).await,
-            false => {
-                self.new_room(room.clone(), None).await;
-
-                self.join_room(room, user).await
-            }
-        }
-    }
-
-    /// send a message to a room
-    ///
-    /// it will fail if there are no users in the room or
-    /// if room does not exists
-    pub async fn send_message_to_room(&self, name: &K, data: T) -> Result<usize, RoomError> {
-        let rooms = self.inner.read().await;
-
-        rooms
-            .get(name)
-            .ok_or(RoomError::RoomNotFound)?
-            .send(data)
-            .map_err(|_| RoomError::MessageSendFail)
-    }
-
-    /// call this at first of your code to initialize user notifier
-    pub async fn init_user(
-        &self,
-        user: U,
-        capacity: Option<usize>,
-    ) -> UserReceiverGuard<'_, K, U, T> {
-        let mut user_reciever = self.user_reciever.write().await;
-
-        match user_reciever.entry(user.clone()) {
-            std::collections::hash_map::Entry::Occupied(channel) => UserReceiverGuard {
-                user,
-                receiver: channel.get().subscribe(),
-                manager: self,
-            },
-            std::collections::hash_map::Entry::Vacant(v) => {
-                let (tx, rx) = broadcast::channel(capacity.unwrap_or(CHANNEL_SIZE));
-                v.insert(tx);
-
-                UserReceiverGuard {
-                    user,
-                    receiver: rx,
-                    manager: self,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Optional: Log lagging if necessary
+                        // eprintln!("Client {} lagged in room", client_id_clone);
+                        continue; // Try to catch up
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Room channel closed, task can exit.
+                        break;
+                    }
                 }
             }
+            // Optional: Log task exit
+            // println!("Forwarding task for client {} in room shutting down.", client_id_clone);
+        });
+
+
+        clients_guard.insert(client_id, ClientState::new(task_handle));
+        self.subscriber_count.fetch_add(1, Ordering::Relaxed); // Relaxed is sufficient here
+    }
+
+    /// Removes a client from the room and aborts their forwarding task.
+    async fn leave(&self, client_id: &ClientId) {
+        let mut clients_guard = self.clients.write().await;
+        if let Some(client_state) = clients_guard.remove(client_id) {
+            client_state.forwarder().abort();
+            self.subscriber_count.fetch_sub(1, Ordering::Relaxed); // Relaxed is sufficient
         }
     }
 
-    /// call this at end of your code to remove user from all rooms
-    pub fn end_user(&self, user: U) {
-        let rooms = self.inner.blocking_write();
-        let mut user_reciever = self.user_reciever.blocking_write();
-
-        for (_key, room) in rooms.iter() {
-            room.blocking_leave(user.clone());
-        }
-
-        match user_reciever.entry(user.clone()) {
-            std::collections::hash_map::Entry::Occupied(o) => {
-                o.remove();
-            }
-            std::collections::hash_map::Entry::Vacant(_) => {}
+    /// Blocking version of `leave` for use in synchronous contexts like `Drop`.
+    fn blocking_leave(&self, client_id: &ClientId) {
+        // Use blocking_write for sync context
+        let mut clients_guard = self.clients.blocking_write();
+        if let Some(client_state) = clients_guard.remove(client_id) {
+            client_state.forwarder().abort();
+            self.subscriber_count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
-    /// join user to room
-    pub async fn join_room(&self, name: K, user: U) -> Result<(), RoomError> {
-        let rooms = self.inner.read().await;
-        let user_reciever = self.user_reciever.read().await;
-
-        let user_reciever = user_reciever
-            .get(&user)
-            .ok_or(RoomError::NotInitiated)?
-            .clone();
-
-        rooms
-            .get(&name)
-            .ok_or(RoomError::RoomNotFound)?
-            .join(user.clone(), user_reciever)
-            .await;
-
-        Ok(())
-    }
-
-    pub async fn remove_room(&self, room: K) {
-        let mut rooms = self.inner.write().await;
-
-        match rooms.entry(room.clone()) {
-            std::collections::hash_map::Entry::Vacant(_) => {}
-            std::collections::hash_map::Entry::Occupied(el) => {
-                let room = el.remove();
-
-                room.clear_tasks().await;
-            }
+    /// Aborts all client forwarding tasks and clears the client list.
+    /// Used when removing the entire room.
+    async fn clear(&self) {
+        let mut clients_guard = self.clients.write().await;
+        for (_, client_state) in clients_guard.drain() {
+            client_state.forwarder().abort();
         }
+        self.subscriber_count.store(0, Ordering::Relaxed);
     }
 
-    pub async fn leave_room(&self, name: K, user: U) -> Result<(), RoomError> {
-        let rooms = self.inner.read().await;
-
-        rooms
-            .get(&name)
-            .ok_or(RoomError::RoomNotFound)?
-            .leave(user.clone())
-            .await;
-
-        Ok(())
+    /// Sends a message to all clients currently subscribed to this room.
+    fn broadcast(&self, message: MessageType) -> Result<usize, broadcast::error::SendError<MessageType>> {
+        self.sender.send(message)
     }
 
-    pub async fn is_room_empty(&self, name: K) -> Result<bool, RoomError> {
-        let rooms = self.inner.read().await;
-
-        Ok(rooms.get(&name).ok_or(RoomError::RoomNotFound)?.is_empty())
+    /// Checks if the room has no subscribers.
+    fn is_empty(&self) -> bool {
+        self.subscriber_count.load(Ordering::Relaxed) == 0
+        // Alternative: Check map length (requires read lock)
+        // self.clients.blocking_read().is_empty() // If called from sync context
+        // Or async: self.clients.read().await.is_empty()
     }
 
-    pub async fn rooms_count(&self) -> usize {
-        let rooms = self.inner.read().await;
+    /// Returns the number of clients currently subscribed to the room.
+    fn subscriber_count(&self) -> u32 {
+        self.subscriber_count.load(Ordering::Relaxed)
+    }
 
-        rooms.len()
+    /// Gets a clone of the room's broadcast sender.
+    fn get_sender(&self) -> broadcast::Sender<MessageType> {
+        self.sender.clone()
     }
 }
 
-impl<K, U, T> Default for RoomsManager<K, U, T>
+
+
+
+// --- Redesigned UserSubscription Handle ---
+
+/// Represents an active user subscription to the RoomsManager system.
+///
+/// Obtain this via `RoomsManager::subscribe`.
+/// Use methods like `join()` and `leave()` to manage room membership.
+/// Use `recv()` or `try_recv()` to get messages from joined rooms.
+///
+/// When this handle is dropped, the user is automatically removed from all
+/// joined rooms and their presence is cleaned up in the manager.
+#[derive(Debug)]
+#[must_use = "UserSubscription must be kept, otherwise the user is immediately cleaned up"]
+pub struct UserSubscription<RoomId, ClientId, MessageType, Presence, Storage>
 where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
+    // Relaxed Clone bounds here as the handle itself doesn't need them cloned often
+    RoomId: Clone + Display + Eq + Hash + Send + Sync + 'static,
+    ClientId: Clone + Display + Eq + Hash + Clone + Send + Sync + 'static, // Need Clone for internal use
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+{
+    client_id: ClientId,
+    // Store Arc<Manager> to allow calling join/leave etc.
+    manager: Arc<RoomsManager<RoomId, ClientId, MessageType, Presence, Storage>>,
+    // The receiver for this user's messages
+    receiver: broadcast::Receiver<MessageType>,
+}
+
+impl<RoomId, ClientId, MessageType, Presence, Storage> UserSubscription<RoomId, ClientId, MessageType, Presence, Storage>
+where
+    // Add Clone bounds needed by manager methods here
+    RoomId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display for errors
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display for errors
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+{
+    /// Joins a specific room.
+    ///
+    /// Idempotent: If the user is already in the room, this does nothing.
+    /// Returns an error if the room does not exist or the user subscription is invalid (which shouldn't happen if the handle exists).
+    pub async fn join(&self, room_id: RoomId) -> Result<(), RoomError> {
+        self.manager.join_room_internal(&room_id, &self.client_id).await
+    }
+
+    /// Joins a specific room, creating it if it doesn't exist.
+    ///
+    /// Idempotent regarding room membership.
+    pub async fn join_or_create(&self, room_id: RoomId, capacity: Option<usize>) -> Result<(), RoomError> {
+        self.manager.join_or_create_room_internal(room_id, &self.client_id, capacity).await
+    }
+
+
+    /// Leaves a specific room.
+    ///
+    /// Idempotent: If the user is not in the room, this does nothing.
+    /// Returns an error if the room does not exist.
+    pub async fn leave(&self, room_id: RoomId) -> Result<(), RoomError> {
+        self.manager.leave_room_internal(&room_id, &self.client_id).await
+    }
+
+    /// Receives the next message broadcast to any joined room.
+    /// See `tokio::sync::broadcast::Receiver::recv` for error details (Lagged, Closed).
+    pub async fn recv(&mut self) -> Result<MessageType, broadcast::error::RecvError> {
+        self.receiver.recv().await
+    }
+
+    /// Attempts to receive the next message without waiting.
+    /// See `tokio::sync::broadcast::Receiver::try_recv` for error details (Empty, Lagged, Closed).
+    pub fn try_recv(&mut self) -> Result<MessageType, broadcast::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
+
+    /// Gets the ClientId associated with this subscription.
+    pub fn client_id(&self) -> &ClientId {
+        &self.client_id
+    }
+
+    /// Returns a mutable reference to the underlying receiver.
+    /// Useful if you need methods not directly exposed by the handle.
+    pub fn receiver_mut(&mut self) -> &mut broadcast::Receiver<MessageType> {
+        &mut self.receiver
+    }
+
+     /// Creates a new receiver handle for this subscription.
+     /// Useful if the original receiver needs to be consumed or used elsewhere.
+    pub fn resubscribe(&self) -> broadcast::Receiver<MessageType> {
+        self.manager.user_channels.blocking_read() // Use blocking read as we might be in sync context
+            .get(&self.client_id)
+            .map(|sender| sender.subscribe())
+            // This panic indicates an inconsistent state if the handle exists but the channel doesn't.
+            .expect("User channel sender missing while subscription handle exists")
+    }
+
+}
+
+impl<RoomId, ClientId, MessageType, Presence, Storage> Drop for UserSubscription<RoomId, ClientId, MessageType, Presence, Storage>
+where
+    RoomId: Clone + Display + Eq + Hash + Send + Sync + 'static,
+    ClientId: Clone + Display + Eq + Hash + Clone + Send + Sync + 'static,
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+{
+    fn drop(&mut self) {
+        // Call the cleanup function on the manager
+        self.manager.cleanup_user(&self.client_id);
+        // Optional: Log cleanup
+        // println!("Cleaning up user: {}", self.client_id);
+    }
+}
+
+// --- Updated RoomsManager ---
+
+#[derive(Debug)]
+pub struct RoomsManager<RoomId, ClientId, MessageType, Presence, Storage>
+where
+    RoomId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+{
+    rooms: RwLock<HashMap<RoomId, Arc<Room<ClientId, MessageType, Presence, Storage>>>>,
+    user_channels: RwLock<HashMap<ClientId, broadcast::Sender<MessageType>>>,
+}
+
+
+impl<RoomId, ClientId, MessageType, Presence, Storage> RoomsManager<RoomId, ClientId, MessageType, Presence, Storage>
+where
+    RoomId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display, // Added Display
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+{
+    // ... (new, ensure_room, remove_room, etc. remain similar) ...
+    pub fn new() -> Self {
+        RoomsManager {
+            rooms: RwLock::new(HashMap::new()),
+            user_channels: RwLock::new(HashMap::new()),
+        }
+    }
+
+     /// Creates a new room with the given ID or returns the existing one.
+    /// If created, uses the specified capacity or a default.
+    /// Returns `true` if the room was newly created, `false` otherwise.
+    pub async fn ensure_room(&self, room_id: &RoomId, capacity: Option<usize>) -> bool {
+        let mut rooms_guard = self.rooms.write().await;
+        if rooms_guard.contains_key(room_id) {
+            false // Room already exists
+        } else {
+            let room = Room::new(capacity.unwrap_or(DEFAULT_CHANNEL_CAPACITY));
+            rooms_guard.insert(room_id.clone(), Arc::new(room));
+            true // Room was created
+        }
+    }
+
+    /// Removes a room and cleans up its resources (stops forwarding tasks).
+    /// Returns `true` if the room existed and was removed, `false` otherwise.
+    pub async fn remove_room(&self, room_id: &RoomId) -> bool {
+        let mut rooms_guard = self.rooms.write().await;
+        if let Some(room_arc) = rooms_guard.remove(room_id) {
+            room_arc.clear().await;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Subscribes a user to the system, providing a handle for interaction.
+    ///
+    /// This initializes the user's presence and broadcast channel if they aren't already active.
+    /// If the user already has an active subscription handle, this will return a new handle
+    /// linked to the same underlying channel. Dropping one handle will NOT affect others
+    /// until the *last* handle for that user is dropped.
+    ///
+    /// Use the returned `UserSubscription` handle to join/leave rooms and receive messages.
+    pub async fn subscribe(
+        self: &Arc<Self>, // Takes Arc<Self> for easy cloning into the handle
+        client_id: ClientId,
+        capacity: Option<usize>,
+    ) -> Result<UserSubscription<RoomId, ClientId, MessageType, Presence, Storage>, RoomError> {
+        let mut user_channels_guard = self.user_channels.write().await;
+        let channel_capacity = capacity.unwrap_or(DEFAULT_CHANNEL_CAPACITY);
+
+        let sender = user_channels_guard
+            .entry(client_id.clone())
+            .or_insert_with(|| {
+                // Optional: Log user initialization
+                // println!("Initializing user channel for: {}", client_id);
+                let (tx, _) = broadcast::channel(channel_capacity);
+                tx
+            });
+
+        let receiver = sender.subscribe();
+
+        Ok(UserSubscription {
+            client_id,
+            manager: Arc::clone(self), // Clone the Arc for the handle
+            receiver,
+        })
+
+        // Note: We previously checked if the user was already present.
+        // Now, subscribing again just gives a new handle to the same underlying channel.
+        // This might be desirable, or you could add a check/error here if you only
+        // want one active "session" handle per client_id at a time.
+        // For example:
+        // if user_channels_guard.contains_key(&client_id) {
+        //      return Err(RoomError::UserAlreadySubscribed(client_id.to_string()));
+        // }
+        // But the current approach allows multiple independent handles if needed.
+    }
+
+    // Internal join method used by UserSubscription handle
+    async fn join_room_internal(&self, room_id: &RoomId, client_id: &ClientId) -> Result<(), RoomError> {
+        let room = { // Scope for read lock
+            let rooms_guard = self.rooms.read().await;
+            rooms_guard.get(room_id)
+                .cloned() // Clone Arc<Room>
+                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
+        }; // rooms_guard lock released here
+
+        let user_sender = { // Scope for read lock
+            let user_channels_guard = self.user_channels.read().await;
+            user_channels_guard
+                .get(client_id)
+                // This error implies the handle exists but the user was somehow cleaned up,
+                // or was never properly initialized by `subscribe`.
+                .cloned() // Clone Sender<T>
+                .ok_or_else(|| RoomError::UserNotInitialized(client_id.to_string()))?
+        }; // user_channels_guard lock released here
+
+        // Now join the specific room (acquires write lock on room.clients)
+        room.join(client_id.clone(), user_sender).await;
+        Ok(())
+    }
+
+     // Internal join_or_create method used by UserSubscription handle
+    async fn join_or_create_room_internal(&self, room_id: RoomId, client_id: &ClientId, capacity: Option<usize>) -> Result<(), RoomError> {
+         let room = { // Scoped to release lock quickly
+            let mut rooms_guard = self.rooms.write().await;
+            rooms_guard.entry(room_id.clone())
+                .or_insert_with(|| Arc::new(Room::new(capacity.unwrap_or(DEFAULT_CHANNEL_CAPACITY))))
+                .clone() // Clone Arc<Room>
+        }; // rooms_guard lock released here
+
+        let user_sender = { // Scoped to release lock quickly
+            let user_channels_guard = self.user_channels.read().await;
+             user_channels_guard
+                .get(client_id)
+                .cloned()
+                .ok_or_else(|| RoomError::UserNotInitialized(client_id.to_string()))?
+        }; // user_channels_guard lock released here
+
+        // Now join the specific room (acquires write lock on room.clients)
+        room.join(client_id.clone(), user_sender).await;
+        Ok(())
+    }
+
+
+    // Internal leave method used by UserSubscription handle
+    async fn leave_room_internal(&self, room_id: &RoomId, client_id: &ClientId) -> Result<(), RoomError> {
+        let room = { // Scope for read lock
+            let rooms_guard = self.rooms.read().await;
+            rooms_guard.get(room_id)
+                .cloned() // Clone Arc<Room>
+                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
+        }; // rooms_guard lock released here
+
+        // Check if user channel still exists, though it should if the handle is valid
+        if !self.user_channels.read().await.contains_key(client_id) {
+             return Err(RoomError::UserNotInitialized(client_id.to_string()));
+        }
+
+        // Leave the specific room (acquires write lock on room.clients)
+        room.leave(client_id).await;
+        Ok(())
+    }
+
+    /// Sends a message to all clients in a specific room.
+    /// Fails if the room does not exist.
+    pub async fn send_message_to_room(&self, room_id: &RoomId, message: MessageType) -> Result<usize, RoomError> {
+        let room = { // Scope for read lock
+             let rooms_guard = self.rooms.read().await;
+             rooms_guard.get(room_id)
+                .cloned()
+                .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?
+        }; // rooms_guard lock released here
+
+        // Broadcast the message
+        room.broadcast(message)
+            .map_err(|e| RoomError::MessageSendFail(Box::new(e)))
+    }
+
+    /// Cleans up a user, removing them from all rooms and their user channel map entry *if*
+    /// this is the last reference (tracked implicitly by Arc on the Room and Sender).
+    /// Called automatically when `UserSubscription` is dropped.
+    fn cleanup_user(&self, client_id: &ClientId) {
+        // Use blocking operations as this is called from Drop
+        let rooms_guard = self.rooms.blocking_read();
+        for room in rooms_guard.values() {
+            // Tell each room the user has left (this aborts the task if present)
+            room.blocking_leave(client_id);
+        }
+        drop(rooms_guard); // Release read lock on rooms
+
+        // Remove user channel sender *only if we're sure no other handles exist*.
+        // The broadcast channel itself handles receiver cleanup.
+        // We need to decide the cleanup strategy:
+        // 1. Remove sender immediately: If another handle exists, `resubscribe` fails. Maybe bad.
+        // 2. Rely on broadcast channel cleanup: `user_channels` map might grow indefinitely if users subscribe but never fully disconnect all handles.
+        // 3. **Use Arc<Sender> or check sender's ref count?** `broadcast::Sender` doesn't easily exposes ref counts.
+        // 4. **Track handle count explicitly?** Add an AtomicUsize counter per user? Seems complex.
+
+        // Let's adopt Strategy 2 for now, relying on the broadcast channel's behavior.
+        // When the *last* receiver (including the original one stored in Room tasks)
+        // AND the Sender in `user_channels` is dropped, the channel resources are freed.
+        // We don't strictly *need* to remove the entry from `user_channels` immediately on drop,
+        // although it would prevent a user ID from being reused immediately with a fresh channel.
+
+        // Option: If we *really* want to remove from the map, we could try checking `sender.receiver_count()`
+        // *after* leaving all rooms, but it's tricky due to timing. Let's omit explicit removal for simplicity.
+        let mut user_channels_guard = self.user_channels.blocking_write();
+        if let Some(sender) = user_channels_guard.get(client_id) {
+             // If receiver_count is 0, it *might* be safe to remove, but tasks might still hold receivers briefly.
+             // println!("User {} cleanup: {} receivers remaining on sender.", client_id, sender.receiver_count());
+             // if sender.receiver_count() == 0 {
+             //     println!("Removing user {} from channel map.", client_id);
+             //     user_channels_guard.remove(client_id);
+             // }
+        }
+        // For now, do NOT remove from user_channels on drop. Allow resubscription.
+    }
+
+    // ... (room_exists, is_room_empty, room_count, etc.) ...
+     pub async fn room_exists(&self, room_id: &RoomId) -> bool {
+        self.rooms.read().await.contains_key(room_id)
+    }
+
+    pub async fn is_room_empty(&self, room_id: &RoomId) -> Result<bool, RoomError> {
+        let rooms_guard = self.rooms.read().await;
+        let room = rooms_guard.get(room_id).ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
+        Ok(room.is_empty())
+    }
+
+     pub async fn room_subscriber_count(&self, room_id: &RoomId) -> Result<u32, RoomError> {
+         let rooms_guard = self.rooms.read().await;
+         let room = rooms_guard.get(room_id).ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
+         Ok(room.subscriber_count())
+    }
+
+    pub async fn room_count(&self) -> usize {
+        self.rooms.read().await.len()
+    }
+
+    pub async fn user_count(&self) -> usize {
+        // This now represents users who have subscribed at least once and whose
+        // channels might still exist, even if they have no active handles.
+        self.user_channels.read().await.len()
+    }
+
+     pub async fn list_rooms(&self) -> Vec<RoomId> {
+        self.rooms.read().await.keys().cloned().collect()
+    }
+}
+
+// --- Default Impl ---
+impl<RoomId, ClientId, MessageType, Presence, Storage> Default for RoomsManager<RoomId, ClientId, MessageType, Presence, Storage>
+where
+    RoomId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display,
+    ClientId: Eq + Hash + Clone + Send + Sync + 'static + fmt::Display,
+    MessageType: Clone + Send + Sync + std::fmt::Debug + 'static,
+    Presence: PresenceLike,
+    Storage: StorageLike,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, U, T> std::ops::Deref for UserReceiverGuard<'_, K, U, T>
-where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
-{
-    type Target = broadcast::Receiver<T>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.receiver
-    }
-}
-
-impl<K, U, T> std::ops::DerefMut for UserReceiverGuard<'_, K, U, T>
-where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.receiver
-    }
-}
-
-impl<K, U, T> Drop for UserReceiverGuard<'_, K, U, T>
-where
-    T: Clone + Send + 'static,
-    K: Eq + std::hash::Hash + Clone,
-    U: Eq + std::hash::Hash + Clone,
-{
-    fn drop(&mut self) {
-        self.manager.end_user(self.user.clone());
-    }
-}
