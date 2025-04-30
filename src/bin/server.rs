@@ -18,10 +18,7 @@ use tokio::{
 };
 use uuid::Uuid;
 use ws_rooms::room::{
-    RoomIdLike, RoomsManager, UserSubscription,
-    message::{ClientMessageType, ServerMessageType},
-    presence::cursor_presence::CursorPresence,
-    storage::shared_list::SharedList,
+    manager::RoomsManager, message::{ClientMessageType, ServerMessageType}, presence::cursor_presence::CursorPresence, storage::shared_list::SharedList, subscription::UserSubscription, RoomIdLike
 }; // Assuming ws_rooms is in scope
 
 // --- Configuration Constants (Server-side) ---

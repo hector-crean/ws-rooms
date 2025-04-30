@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{presence::PresenceLike, storage::StorageLike, ClientIdLike, Room, RoomError, RoomIdLike};
+use super::{presence::PresenceLike, storage::StorageLike, ClientIdLike, Room, RoomIdLike};
+use crate::room::error::RoomError;
  // Add Duration
 
 
