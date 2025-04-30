@@ -25,16 +25,17 @@ pub enum StorageError {
 
 pub trait StorageLike: Send + Sync + Clone + Debug + 'static + Default {
     /// The type representing a change/operation to the storage
-    type Operation: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug;
+    type Version: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug + Clone;
+    type Operation: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug + Clone;
     
     /// The type representing the full state that can be sent to clients
-    type Snapshot: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug;
+    type Snapshot: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug + Clone;
 
     /// Current version of the storage, used for reconciliation
-    fn version(&self) -> u64;
+    fn version(&self) -> Self::Version;
 
     /// Apply an operation and return the new version
-    fn apply_operation(&mut self, op: Self::Operation) -> Result<u64, StorageError>;
+    fn apply_operation(&mut self, op: Self::Operation) -> Result<Self::Version, StorageError>;
 
     /// Get current state as a snapshot (for new clients or full sync)
     fn get_snapshot(&self) -> Result<Self::Snapshot, StorageError>;

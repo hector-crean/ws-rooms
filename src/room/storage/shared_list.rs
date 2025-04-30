@@ -23,12 +23,13 @@ pub struct SharedList<T> {
 impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> StorageLike for SharedList<T> {
     type Operation = Operation<T>;
     type Snapshot = Vec<T>;
+    type Version = u64;
 
-    fn version(&self) -> u64 {
+    fn version(&self) -> Self::Version {
         self.version
     }
 
-    fn apply_operation(&mut self, op: Self::Operation) -> Result<u64, StorageError> {
+    fn apply_operation(&mut self, op: Self::Operation) -> Result<Self::Version, StorageError> {
         match op {
             Operation::Insert { index, value } => {
                 if index <= self.items.len() {

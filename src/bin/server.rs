@@ -9,35 +9,31 @@ use axum::{
 };
 use futures_util::{
     SinkExt,
-    StreamExt,
-    stream::{SplitSink, SplitStream}, // Add SplitSink/SplitStream
+    StreamExt, // Add SplitSink/SplitStream
 };
-use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration}; // Add Duration
 use tokio::{
-    sync::Mutex,               // Add tokio::sync::Mutex
-    time::{Instant, Interval}, // Add Instant, Interval
+    sync::Mutex,   // Add tokio::sync::Mutex
+    time::Instant, // Add Instant, Interval
 };
 use uuid::Uuid;
-use ws_rooms::room::{message::ServerMessageType, presence::{cursor_presence::CursorPresence}, storage::{shared_list::SharedList}, RoomsManager, UserSubscription}; // Assuming ws_rooms is in scope
-
-
+use ws_rooms::room::{
+    RoomIdLike, RoomsManager, UserSubscription,
+    message::{ClientMessageType, ServerMessageType},
+    presence::cursor_presence::CursorPresence,
+    storage::shared_list::SharedList,
+}; // Assuming ws_rooms is in scope
 
 // --- Configuration Constants (Server-side) ---
 const SERVER_HEARTBEAT_INTERVAL_SECONDS: u64 = 30; // How often server sends a Ping
 const SERVER_HEARTBEAT_TIMEOUT_SECONDS: u64 = 60; // How long server waits for Pong after its Ping
 
-
-
 type ClientId = Uuid;
 type RoomId = String;
 
-
-
-
 // Your existing ChatManager/ChatSubscription types
-type ChatManager = RoomsManager<RoomId, ClientId, ServerMessageType<RoomId, ClientId>, CursorPresence, SharedList<String>>;
-type ChatSubscription = UserSubscription<RoomId, ClientId, ServerMessageType<RoomId, ClientId>, CursorPresence, SharedList<String>>;
+type ChatManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedList<String>>;
+type ChatSubscription = UserSubscription<RoomId, ClientId, CursorPresence, SharedList<String>>;
 
 /// Axum WebSocket handler (mostly unchanged)
 async fn ws_handler(
@@ -98,7 +94,7 @@ async fn handle_socket(
             match msg_bytes {
                 Ok(msg) => {
                     tracing::trace!(%client_id, %room_id, "Sending message to WebSocket: {}", msg);
-                    if sender.send(Message::Text(msg.into())).await.is_err() {
+                    if sender.send(Message::Text(msg)).await.is_err() {
                         tracing::warn!(%client_id, %room_id, "WS Send (recv_task): Failed to send message, client disconnected?");
                         break;
                     }
@@ -122,26 +118,24 @@ async fn handle_socket(
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(utf8_bytes) => {
+                    // Try to parse the client message
+                    match ClientMessageType::try_from(utf8_bytes) {
+                        Ok(client_msg) => {
+                            // Extract room_id from the message if it's a room-specific message
+                           
 
-                    let msg = ServerMessageType::<RoomId, ClientId>::try_from(utf8_bytes);
-
-                    match msg {
-                        Ok(msg) => {
-                            tracing::debug!(%client_id, %send_task_room_id, "Received text: {:?}", msg);
+                            // Process the message
                             if let Err(e) = send_task_manager
-                                .send_message_to_room(&send_task_room_id, msg)
+                                .handle_client_message(&client_id, client_msg)
                                 .await
                             {
-                                tracing::error!(%client_id, %send_task_room_id, "Failed to send message to room: {}", e);
+                                tracing::error!(%client_id, "Failed to handle client message: {}", e);
                             }
                         }
                         Err(e) => {
-                            tracing::error!(%client_id, %send_task_room_id, "Failed to convert message to ServerMessageType: {}", e);
+                            tracing::error!(%client_id, "Failed to parse client message: {}", e);
                         }
                     }
-
-
-                   
                 }
                 Message::Binary(bin) => {
                     tracing::warn!(%client_id, %send_task_room_id, "Received unexpected binary message ({} bytes)", bin.len());
@@ -269,7 +263,7 @@ async fn main() {
 
     // Create Axum router
     let app = Router::new()
-        .route("/ws/room/{:room_id}", get(ws_handler)) 
+        .route("/ws/room/{:room_id}", get(ws_handler))
         .with_state(manager);
 
     // Start the server

@@ -13,8 +13,6 @@ use tokio::{
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
-use url::Url;
-use uuid;
 
 // Type aliases for clarity
 type WsWriter = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;

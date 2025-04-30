@@ -29,6 +29,16 @@ impl<P: PresenceLike> ClientState<P> {
     pub fn forwarder_mut(&mut self) -> &mut ClientForwarder {
         &mut self.forwarder
     }
+    pub fn presence_mut(&mut self) -> &mut P {
+        &mut self.presence
+    }
+    pub fn presence(&self) -> &P {
+        &self.presence
+    }
+    pub fn last_seen(&self) -> Instant {
+        self.last_seen
+    }
+    
   
     
 }

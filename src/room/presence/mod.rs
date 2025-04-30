@@ -4,7 +4,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::time::Instant;
-use std::collections::HashMap;
 
 
 #[derive(thiserror::Error, Debug)]
@@ -15,9 +14,9 @@ pub enum PresenceError {
     StaleUpdate,
 }
 
-pub trait PresenceLike: Send + Sync + Clone + Debug + Default {
+pub trait PresenceLike: Send + Sync + Clone + Debug + Default + 'static {
     /// The data structure for presence updates (e.g., cursor position, status)
-    type Update: Serialize + for<'de> Deserialize<'de> + Clone + Debug;
+    type Update: Serialize + for<'de> Deserialize<'de> + Clone + Debug + Send + Sync;
 
     /// Apply an update to the presence state
     /// Returns whether the state actually changed
