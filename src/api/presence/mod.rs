@@ -6,7 +6,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::api::{ChatManager, ErrorResponse};
+use crate::{api::ErrorResponse, room::{manager::RoomsManager, storage::StorageLike, ClientIdLike, RoomIdLike}, server::ChatManager};
 use crate::room::presence::PresenceLike;
 
 
@@ -27,11 +27,11 @@ pub struct ClientPresence {
 
 /// GET /rooms/:room_id/presence
 /// Get presence information for all users in a room
-pub async fn get_presence(
-    State(manager): State<Arc<ChatManager>>,
+pub async fn get_presence<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
 ) -> impl IntoResponse {
-    match manager.get_room_details(&room_id).await {
+    match manager.get_room_details(&room_id.into()).await {
         Ok(details) => {
             let users = details.client_presences
                 .into_iter()

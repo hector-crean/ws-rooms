@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "default_room".to_string());
 
     let client_id = uuid::Uuid::new_v4();
-    let url = format!("ws://127.0.0.1:3000/ws/room/{}", room_id);
+    let url = format!("ws://127.0.0.1:9999/ws/room/{}", room_id);
     tracing::info!(%client_id, %room_id, "Connecting to {}", url);
 
     // --- Connection ---

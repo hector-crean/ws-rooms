@@ -13,7 +13,7 @@ use tokio::{
     time::Instant, // Add Instant, Interval
 };
 use uuid::Uuid;
-use crate::{room::message::ClientMessageType, server::{ChatManager, ChatSubscription}}; // Assuming ws_rooms is in scope
+use crate::{room::{manager::RoomsManager, message::ClientMessageType, presence::PresenceLike, storage::StorageLike, subscription::UserSubscription, ClientIdLike, RoomIdLike}, server::{ChatManager, ChatSubscription}}; // Assuming ws_rooms is in scope
 
 
 // --- Configuration Constants (Server-side) ---
@@ -23,15 +23,15 @@ const SERVER_HEARTBEAT_TIMEOUT_SECONDS: u64 = 60; // How long server waits for P
 
 
 /// Axum WebSocket handler (mostly unchanged)
-pub async fn ws_handler(
+pub async fn ws_handler<RoomId: RoomIdLike + for<'a> serde::Deserialize<'a>, ClientId: ClientIdLike + for<'a> serde::Deserialize<'a>, Presence: PresenceLike + for<'a> serde::Deserialize<'a>, Storage: StorageLike + for<'a> serde::Deserialize<'a>>(
     ws: WebSocketUpgrade,
-    State(manager): State<Arc<ChatManager>>,
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>, // Extract room_id from path
 ) -> impl IntoResponse {
     let client_id = Uuid::new_v4();
     tracing::info!(%client_id, %room_id, "New WebSocket connection attempt");
 
-    let sub_result = manager.subscribe(client_id, None).await;
+    let sub_result = manager.subscribe(client_id.into(), None).await;
     let sub_handle = match sub_result {
         Ok(handle) => handle,
         Err(e) => {
@@ -40,21 +40,26 @@ pub async fn ws_handler(
         }
     };
 
-    if let Err(e) = sub_handle.join_or_create(room_id.clone(), None).await {
+    if let Err(e) = sub_handle.join_or_create(room_id.clone().into(), None).await {
         tracing::error!(%client_id, %room_id, "Failed to join room: {}", e);
         return e.into_response();
     }
 
-    ws.on_upgrade(move |socket| handle_socket(socket, manager, sub_handle, room_id))
+    ws.on_upgrade(move |socket| handle_socket(socket, manager, sub_handle, room_id.clone()))
 }
 
 /// Handles the actual WebSocket communication for a single client (Updated for Heartbeat)
-async fn handle_socket(
+async fn handle_socket<RoomId, ClientId, Presence, Storage>(
     socket: WebSocket,
-    manager: Arc<ChatManager>,
-    mut subscription: ChatSubscription, // Takes ownership
+    manager: Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>,
+    mut subscription: UserSubscription<RoomId, ClientId, Presence, Storage>,
     room_id: String,
-) {
+) where
+    RoomId: RoomIdLike + for<'a> serde::Deserialize<'a>,
+    ClientId: ClientIdLike + for<'a> serde::Deserialize<'a>,
+    Presence: PresenceLike + for<'a> serde::Deserialize<'a>,
+    Storage: StorageLike + for<'a> serde::Deserialize<'a>,
+{
     let client_id = *subscription.client_id();
     tracing::info!(%client_id, %room_id, "WebSocket connection established");
 
@@ -188,7 +193,7 @@ async fn handle_socket(
     // --- Concurrently run all tasks ---
     // Wait for *any* task to finish. If one finishes (error, disconnect, timeout),
     // abort the others and clean up.
-    let mut final_sub_handle: Option<ChatSubscription> = None;
+    let mut final_sub_handle: Option<UserSubscription<RoomId, ClientId, Presence, Storage>> = None;
 
     tokio::select! {
         res = &mut recv_task => {

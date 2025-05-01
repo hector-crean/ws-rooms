@@ -21,6 +21,7 @@ use serde::Serialize;
 use storage::{StorageError, StorageLike};
 use tokio::sync::{RwLock, broadcast};
 use chrono::Utc;
+use ts_rs::TS;
 use uuid::Uuid;
 
 const DEFAULT_CHANNEL_CAPACITY: usize = 100;
@@ -30,11 +31,11 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 100;
 
 
 pub trait RoomIdLike:
-    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug
+    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug + TS + From<String> 
 {
 }
 pub trait ClientIdLike:
-    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug
+    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug + TS + From<Uuid> + Copy
 {
 }
 

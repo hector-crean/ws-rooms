@@ -1,9 +1,11 @@
 use super::{StorageError, StorageLike};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::fmt::Debug;
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export)]
 pub enum Operation<T> {
     // Atomic operations that can be applied to our storage
     Insert { index: usize, value: T },
@@ -14,19 +16,25 @@ pub enum Operation<T> {
     Move { from: usize, to: usize },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SharedList<T> {
     items: Vec<T>,
     version: u64,
 }
 
-impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static> StorageLike for SharedList<T> {
+impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static + TS> StorageLike for SharedList<T> {
     type Operation = Operation<T>;
-    type Snapshot = Vec<T>;
     type Version = u64;
 
     fn version(&self) -> Self::Version {
         self.version
+    }
+
+    fn merge(&mut self, other: &Self) -> Result<(), StorageError> {
+        self.items.extend(other.items.clone());
+        self.version += 1;
+        Ok(())
     }
 
     fn apply_operation(&mut self, op: Self::Operation) -> Result<Self::Version, StorageError> {
@@ -76,12 +84,7 @@ impl<T: Clone + Debug + Serialize + for<'de> Deserialize<'de> + Send + Sync + 's
             },
         }
     }
-    fn get_snapshot(&self) -> Result<Self::Snapshot, StorageError> {
-        Ok(self.items.clone())
-    }
-    fn from_snapshot(snapshot: Self::Snapshot) -> Result<Self, StorageError> {
-        Ok(SharedList { items: snapshot, version: 0 })
-    }
+ 
     
 }
 

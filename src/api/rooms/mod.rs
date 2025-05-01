@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::api::{ChatManager, ClientId, RoomId, ErrorResponse};
+use crate::{api::ErrorResponse, room::{manager::RoomsManager, presence::PresenceLike, storage::StorageLike, ClientIdLike, RoomIdLike}, server::{ChatManager, ClientId, RoomId}};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RoomDetails {
@@ -25,8 +25,8 @@ pub struct CreateRoomRequest {
 
 /// GET /rooms
 /// List all rooms
-pub async fn list_rooms(
-    State(manager): State<Arc<ChatManager>>,
+pub async fn list_rooms<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
 ) -> impl IntoResponse {
     let rooms = manager.list_rooms_with_details().await;
     Json(rooms)
@@ -34,11 +34,11 @@ pub async fn list_rooms(
 
 /// GET /rooms/:room_id
 /// Get room details
-pub async fn get_room(
-    State(manager): State<Arc<ChatManager>>,
+pub async fn get_room<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
 ) -> impl IntoResponse {
-    match manager.get_room_details(&room_id).await {
+    match manager.get_room_details(&room_id.into()).await {
         Ok(details) => Json(details).into_response(),
         Err(e) => (
             axum::http::StatusCode::NOT_FOUND,
@@ -49,12 +49,12 @@ pub async fn get_room(
 
 /// POST /rooms/:room_id
 /// Create or update a room
-pub async fn create_room(
-    State(manager): State<Arc<ChatManager>>,
+pub async fn create_room<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
     Json(payload): Json<CreateRoomRequest>,
 ) -> impl IntoResponse {
-    match manager.ensure_room(&room_id, payload.capacity).await {
+    match manager.ensure_room(&room_id.into(), payload.capacity).await {
         true => (
             axum::http::StatusCode::CREATED,
             Json(serde_json::json!({ "success": true })),
@@ -68,11 +68,11 @@ pub async fn create_room(
 
 /// DELETE /rooms/:room_id
 /// Delete a room
-pub async fn delete_room(
-    State(manager): State<Arc<ChatManager>>,
+pub async fn delete_room<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+    State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
 ) -> impl IntoResponse {
-    match manager.delete_room(&room_id).await {
+    match manager.delete_room(&room_id.into()).await {
         Ok(true) => (
             axum::http::StatusCode::OK,
             Json(serde_json::json!({ "success": true })),

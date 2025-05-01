@@ -10,9 +10,7 @@ pub mod rooms;
 pub mod storage;
 pub mod presence;
 
-type ClientId = Uuid;
-type RoomId = String;
-type ChatManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedList<String>>;
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {

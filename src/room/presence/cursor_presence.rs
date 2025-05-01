@@ -1,35 +1,34 @@
 use super::{PresenceLike, PresenceError};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::time::Instant;
 
 // Example implementation for cursor presence:
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS, Deserialize)]
 pub struct CursorPresence {
     position: Option<Point>,
     #[serde(skip)]
-    last_updated: Instant,
-    #[serde(rename = "last_updated")]
-    last_updated_ms: u128,
+    last_updated: DateTime<Utc>,
 }
 
 impl Default for CursorPresence {
     fn default() -> Self {
-        let now = Instant::now();
+        let now = std::time::SystemTime::now();
         Self { 
             position: None, 
-            last_updated: now,
-            last_updated_ms: now.elapsed().as_millis(),
+            last_updated: DateTime::<Utc>::from(now),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq)]
 pub struct Point {
     x: f64,
     y: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub enum CursorUpdate {
     Move(Point),
     Hide,
@@ -59,13 +58,13 @@ impl PresenceLike for CursorPresence {
         };
 
         if changed {
-            self.last_updated = Instant::now();
-            self.last_updated_ms = self.last_updated.elapsed().as_millis();
+            let now = std::time::SystemTime::now();
+            self.last_updated = DateTime::<Utc>::from(now);
         }
         Ok(changed)
     }
 
-    fn last_updated(&self) -> Instant {
+    fn last_updated(&self) -> DateTime<Utc> {
         self.last_updated
     }
 }

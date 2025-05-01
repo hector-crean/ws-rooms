@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let app = App::new();
-    app.run(3000).await?;
+    app.run(9999).await?;
 
     Ok(())
 }
