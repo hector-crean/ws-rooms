@@ -4,17 +4,12 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+use uuid::Uuid;
 use std::sync::Arc;
-use crate::{api::ErrorResponse, room::{manager::RoomsManager, presence::PresenceLike, storage::StorageLike, ClientIdLike, RoomIdLike}, server::{ChatManager, ClientId, RoomId}};
+use crate::{api::ErrorResponse, room::{manager::{RoomDetails, RoomsManager}, presence::{cursor_presence::CursorPresence, PresenceLike}, storage::{SharedList, StorageLike}, ClientIdLike, RoomIdLike}, server::{ChatManager, ClientId, RoomId}};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RoomDetails {
-    pub id: RoomId,
-    pub created_at: u128,
-    pub last_connection_at: u128,
-    pub metadata: Option<serde_json::Value>,
-    pub users: Vec<ClientId>,
-}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreateRoomRequest {
@@ -23,13 +18,31 @@ pub struct CreateRoomRequest {
 
 
 
+
+
+#[derive(Debug, Serialize, TS)]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
+#[ts(export)]
+pub struct ListRoomsResponse<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike> {
+    pub rooms: Vec<RoomDetails<RoomId, ClientId, Presence, Storage>>
+}
+
 /// GET /rooms
 /// List all rooms
 pub async fn list_rooms<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
     State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
 ) -> impl IntoResponse {
     let rooms = manager.list_rooms_with_details().await;
-    Json(rooms)
+    Json(ListRoomsResponse { rooms })
+}
+
+
+
+#[derive(Debug, Serialize, TS)]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
+#[ts(export)]
+pub struct GetRoomResponse<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike> {
+    pub room: RoomDetails<RoomId, ClientId, Presence, Storage>
 }
 
 /// GET /rooms/:room_id

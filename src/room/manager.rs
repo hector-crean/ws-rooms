@@ -5,13 +5,21 @@ use chrono::Utc;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use serde;
+use ts_rs::TS;
+use uuid::Uuid;
 
 use super::error::RoomError;
 use super::message::ClientMessageType;
 use super::message::ServerMessageType;
 use super::subscription::UserSubscription;
 use super::DEFAULT_CHANNEL_CAPACITY;
-use super::{presence::PresenceLike, storage::StorageLike, ClientIdLike, Room, RoomIdLike};
+use super::{
+    presence::{PresenceLike, cursor_presence::CursorPresence}, 
+    storage::{StorageLike, shared_list::SharedList}, 
+    ClientIdLike, 
+    Room, 
+    RoomIdLike
+};
 
 #[derive(Debug)]
 pub struct RoomsManager<RoomId, ClientId, Presence, Storage>
@@ -508,7 +516,9 @@ where
 }
 
 /// Detailed information about a room
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, TS)]
+#[ts(export)]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
 pub struct RoomDetails<RoomId, ClientId, Presence, Storage>
 where
     RoomId: RoomIdLike + serde::Serialize,
