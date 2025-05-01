@@ -26,22 +26,66 @@ pub enum RoomError {
     PresenceError(#[from] PresenceError),
     #[error("Storage error: {0}")]
     StorageError(#[from] StorageError),
+    #[error("Room already exists")]
+    RoomAlreadyExists,
 }
 
 impl IntoResponse for RoomError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            Self::RoomNotFound(room_id) => (axum::http::StatusCode::NOT_FOUND, format!("Room '{}' not found", room_id)).into_response(),
-            Self::UserNotInitialized(user_id) => (axum::http::StatusCode::UNAUTHORIZED, format!("User '{}' not initialized", user_id)).into_response(),
-            Self::UserAlreadySubscribed(user_id) => (axum::http::StatusCode::CONFLICT, format!("User '{}' already subscribed", user_id)).into_response(),
-            Self::LockPoisoned(room_id) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Internal lock poisoned in room '{}'", room_id)).into_response(),
-            Self::UserSendFail => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to send message to user channel").into_response(),
-            Self::InvalidMessage => (axum::http::StatusCode::BAD_REQUEST, "Invalid message").into_response(),
-            Self::UserAlreadyInRoom(room_id, user_id) => (axum::http::StatusCode::CONFLICT, format!("User '{}' already in room '{}'", user_id, room_id)).into_response(),
-            Self::UserNotInRoom(user_id) => (axum::http::StatusCode::NOT_FOUND, format!("User '{}' not in room", user_id)).into_response(),
-            Self::PresenceError(presence_error) => (axum::http::StatusCode::BAD_REQUEST, format!("Presence error: {}", presence_error)).into_response(),
-            Self::StorageError(storage_error) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {}", storage_error)).into_response(),
-            _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+            Self::RoomNotFound(room_id) => (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("Room '{}' not found", room_id),
+            )
+                .into_response(),
+            Self::UserNotInitialized(user_id) => (
+                axum::http::StatusCode::UNAUTHORIZED,
+                format!("User '{}' not initialized", user_id),
+            )
+                .into_response(),
+            Self::UserAlreadySubscribed(user_id) => (
+                axum::http::StatusCode::CONFLICT,
+                format!("User '{}' already subscribed", user_id),
+            )
+                .into_response(),
+            Self::LockPoisoned(room_id) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Internal lock poisoned in room '{}'", room_id),
+            )
+                .into_response(),
+            Self::UserSendFail => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to send message to user channel",
+            )
+                .into_response(),
+            Self::InvalidMessage => {
+                (axum::http::StatusCode::BAD_REQUEST, "Invalid message").into_response()
+            }
+            Self::UserAlreadyInRoom(room_id, user_id) => (
+                axum::http::StatusCode::CONFLICT,
+                format!("User '{}' already in room '{}'", user_id, room_id),
+            )
+                .into_response(),
+            Self::UserNotInRoom(user_id) => (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("User '{}' not in room", user_id),
+            )
+                .into_response(),
+            Self::PresenceError(presence_error) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("Presence error: {}", presence_error),
+            )
+                .into_response(),
+            Self::StorageError(storage_error) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Storage error: {}", storage_error),
+            )
+                .into_response(),
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error",
+            )
+                .into_response(),
         }
     }
 }

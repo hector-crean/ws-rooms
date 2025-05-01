@@ -1,7 +1,16 @@
+use crate::{
+    room::{
+        ClientIdLike, RoomIdLike, manager::RoomsManager, message::ClientMessageType,
+        presence::PresenceLike, storage::StorageLike, subscription::UserSubscription,
+    },
+    server::{ChatManager, ChatSubscription},
+};
 use axum::{
     extract::{
-        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}, Path, State
-    }, response::IntoResponse
+        Path, State,
+        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+    },
+    response::IntoResponse,
 };
 use futures_util::{
     SinkExt,
@@ -12,18 +21,19 @@ use tokio::{
     sync::Mutex,   // Add tokio::sync::Mutex
     time::Instant, // Add Instant, Interval
 };
-use uuid::Uuid;
-use crate::{room::{manager::RoomsManager, message::ClientMessageType, presence::PresenceLike, storage::StorageLike, subscription::UserSubscription, ClientIdLike, RoomIdLike}, server::{ChatManager, ChatSubscription}}; // Assuming ws_rooms is in scope
-
+use uuid::Uuid; // Assuming ws_rooms is in scope
 
 // --- Configuration Constants (Server-side) ---
 const SERVER_HEARTBEAT_INTERVAL_SECONDS: u64 = 30; // How often server sends a Ping
 const SERVER_HEARTBEAT_TIMEOUT_SECONDS: u64 = 60; // How long server waits for Pong after its Ping
 
-
-
 /// Axum WebSocket handler (mostly unchanged)
-pub async fn ws_handler<RoomId: RoomIdLike + for<'a> serde::Deserialize<'a>, ClientId: ClientIdLike + for<'a> serde::Deserialize<'a>, Presence: PresenceLike + for<'a> serde::Deserialize<'a>, Storage: StorageLike + for<'a> serde::Deserialize<'a>>(
+pub async fn ws_handler<
+    RoomId: RoomIdLike + for<'a> serde::Deserialize<'a>,
+    ClientId: ClientIdLike + for<'a> serde::Deserialize<'a>,
+    Presence: PresenceLike + for<'a> serde::Deserialize<'a>,
+    Storage: StorageLike + for<'a> serde::Deserialize<'a>,
+>(
     ws: WebSocketUpgrade,
     State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>, // Extract room_id from path
@@ -40,7 +50,10 @@ pub async fn ws_handler<RoomId: RoomIdLike + for<'a> serde::Deserialize<'a>, Cli
         }
     };
 
-    if let Err(e) = sub_handle.join_or_create(room_id.clone().into(), None).await {
+    if let Err(e) = sub_handle
+        .join_or_create(room_id.clone().into(), None)
+        .await
+    {
         tracing::error!(%client_id, %room_id, "Failed to join room: {}", e);
         return e.into_response();
     }
@@ -113,7 +126,6 @@ async fn handle_socket<RoomId, ClientId, Presence, Storage>(
                     match ClientMessageType::try_from(utf8_bytes) {
                         Ok(client_msg) => {
                             // Extract room_id from the message if it's a room-specific message
-                           
 
                             // Process the message
                             if let Err(e) = send_task_manager
@@ -236,13 +248,14 @@ async fn handle_socket<RoomId, ClientId, Presence, Storage>(
     }
     drop(sender);
 
-    // Dropping `final_sub_handle` (if it was successfully retrieved) or the original `subscription`
-    // (if recv_task panicked before returning it) automatically handles leaving rooms via ws-rooms Drop impl.
-    // If recv_task panicked, `subscription` is still in scope and will be dropped here.
-    // If recv_task finished normally, `final_sub_handle` holds the subscription and it will be dropped.
-    // This ensures cleanup happens regardless of which task finished first.
+    // Explicitly leave the room before dropping the subscription
+    if let Some(mut sub) = final_sub_handle {
+        if let Err(e) = sub.leave(final_sub_room_id.into()).await {
+            // tracing::warn!(%client_id, %final_sub_room_id, "Error explicitly leaving room: {}", e);
+        }
+        // Now drop the subscription which should handle any remaining cleanup
+    }
+    // If final_sub_handle is None, the original subscription will be dropped automatically
+
+    // tracing::info!(%client_id, %final_sub_room_id, "Client disconnected and cleanup completed");
 }
-
-
-
-
