@@ -16,3 +16,4 @@ tracing-subscriber = "0.3.2"
 tokio-tungstenite = "0.26.2"
 url = "2.5.4"
 chrono = { version = "0.4.41", features = ["serde"] }
+tower-http = { version = "0.6.1", features = ["cors"] }

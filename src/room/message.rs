@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{presence::PresenceLike, storage::StorageLike, ClientIdLike, Room, RoomIdLike};
+use super::{presence::PresenceLike, storage::StorageLike, ClientIdLike, RoomIdLike};
 use crate::room::error::RoomError;
  // Add Duration
 
@@ -36,10 +36,7 @@ where
 
 impl<RoomId: RoomIdLike, ClientId: ClientIdLike, Storage: StorageLike, Presence: PresenceLike> ClientMessageType<RoomId, ClientId, Presence, Storage> {
     pub fn process(&self) -> Result<ServerMessageType<RoomId, ClientId, Presence, Storage>, RoomError> {
-     match self {
-        
-         _ => Err(RoomError::InvalidMessage)
-     }
+     Err(RoomError::InvalidMessage)
     }
  }
 

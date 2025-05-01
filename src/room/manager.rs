@@ -1,10 +1,10 @@
-
 // --- Updated RoomsManager ---
 
 use std::{collections::HashMap, sync::Arc};
 use chrono::Utc;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
+use serde;
 
 use super::error::RoomError;
 use super::message::ClientMessageType;
@@ -428,6 +428,99 @@ where
         room.join(client_id.clone(), user_sender).await;
         Ok(())
     }
+
+    /// Gets detailed information about a specific room.
+    /// Returns an error if the room doesn't exist.
+    pub async fn get_room_details(&self, room_id: &RoomId) -> Result<RoomDetails<RoomId, ClientId, Presence, Storage>, RoomError> {
+        let rooms_guard = self.rooms.read().await;
+        let room = rooms_guard
+            .get(room_id)
+            .ok_or_else(|| RoomError::RoomNotFound(room_id.to_string()))?;
+
+        let clients_guard = room.clients.read().await;
+        let storage_guard = room.storage.read().await;
+
+        // Collect client IDs and their presences
+        let mut client_presences = HashMap::new();
+        let mut client_ids = Vec::with_capacity(clients_guard.len());
+        
+        for (client_id, client_state) in clients_guard.iter() {
+            client_ids.push(client_id.clone());
+            client_presences.insert(client_id.clone(), client_state.presence().clone());
+        }
+
+        Ok(RoomDetails {
+            room_id: room_id.clone(),
+            subscriber_count: room.subscriber_count(),
+            client_ids,
+            storage: storage_guard.clone(),
+            client_presences,
+        })
+    }
+
+    /// Lists all rooms with their basic information.
+    pub async fn list_rooms_with_details(&self) -> Vec<RoomDetails<RoomId, ClientId, Presence, Storage>> {
+        let rooms_guard = self.rooms.read().await;
+        let mut details = Vec::with_capacity(rooms_guard.len());
+
+        for (room_id, room) in rooms_guard.iter() {
+            let clients_guard = room.clients.read().await;
+            let storage_guard = room.storage.read().await;
+
+            // Collect client IDs and their presences
+            let mut client_presences = HashMap::new();
+            let mut client_ids = Vec::with_capacity(clients_guard.len());
+            
+            for (client_id, client_state) in clients_guard.iter() {
+                client_ids.push(client_id.clone());
+                client_presences.insert(client_id.clone(), client_state.presence().clone());
+            }
+
+            details.push(RoomDetails {
+                room_id: room_id.clone(),
+                subscriber_count: room.subscriber_count(),
+                client_ids,
+                storage: storage_guard.clone(),
+                client_presences,
+            });
+        }
+
+        details
+    }
+
+    /// Deletes a room and all its associated resources.
+    /// Returns true if the room was deleted, false if it didn't exist.
+    pub async fn delete_room(&self, room_id: &RoomId) -> Result<bool, RoomError> {
+        let mut rooms_guard = self.rooms.write().await;
+        if let Some(room_arc) = rooms_guard.remove(room_id) {
+            // Clear the room's resources
+            room_arc.clear().await;
+            
+            // Remove all client-room mappings for this room
+            let mut client_rooms_guard = self.client_rooms.write().await;
+            client_rooms_guard.retain(|_, r| r != room_id);
+            
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+/// Detailed information about a room
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RoomDetails<RoomId, ClientId, Presence, Storage>
+where
+    RoomId: RoomIdLike + serde::Serialize,
+    ClientId: ClientIdLike + serde::Serialize,
+    Presence: PresenceLike + serde::Serialize,
+    Storage: StorageLike + serde::Serialize,
+{
+    pub room_id: RoomId,
+    pub subscriber_count: u32,
+    pub client_ids: Vec<ClientId>,
+    pub storage: Storage,
+    pub client_presences: HashMap<ClientId, Presence>,
 }
 
 // --- Default Impl ---

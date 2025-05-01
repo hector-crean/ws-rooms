@@ -23,7 +23,7 @@ pub enum StorageError {
 
 
 
-pub trait StorageLike: Send + Sync + Clone + Debug + 'static + Default {
+pub trait StorageLike: Send + Sync + Clone + Debug + 'static + Default + serde::Serialize {
     /// The type representing a change/operation to the storage
     type Version: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug + Clone;
     type Operation: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug + Clone;

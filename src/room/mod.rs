@@ -8,18 +8,16 @@ pub mod manager;
 
 use std::{
     collections::HashMap,
-    fmt::{self, Debug, Display},
+    fmt::{self, Debug},
     hash::Hash,
-    sync::{
-        atomic::{AtomicU32, Ordering}, Arc
-    },
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use client_state::ClientState;
 use error::RoomError;
 use message::{ClientMessageType, ServerMessageType};
 use presence::{PresenceError, PresenceLike};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use storage::{StorageError, StorageLike};
 use tokio::sync::{RwLock, broadcast};
 use chrono::Utc;

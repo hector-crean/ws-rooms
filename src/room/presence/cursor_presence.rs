@@ -1,18 +1,25 @@
-
 use super::{PresenceLike, PresenceError};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 // Example implementation for cursor presence:
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CursorPresence {
     position: Option<Point>,
+    #[serde(skip)]
     last_updated: Instant,
+    #[serde(rename = "last_updated")]
+    last_updated_ms: u128,
 }
 
 impl Default for CursorPresence {
     fn default() -> Self {
-        Self { position: None, last_updated: Instant::now() }
+        let now = Instant::now();
+        Self { 
+            position: None, 
+            last_updated: now,
+            last_updated_ms: now.elapsed().as_millis(),
+        }
     }
 }
 
@@ -53,6 +60,7 @@ impl PresenceLike for CursorPresence {
 
         if changed {
             self.last_updated = Instant::now();
+            self.last_updated_ms = self.last_updated.elapsed().as_millis();
         }
         Ok(changed)
     }

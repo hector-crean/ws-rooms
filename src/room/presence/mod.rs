@@ -14,7 +14,7 @@ pub enum PresenceError {
     StaleUpdate,
 }
 
-pub trait PresenceLike: Send + Sync + Clone + Debug + Default + 'static {
+pub trait PresenceLike: Send + Sync + Clone + Debug + Default + 'static + serde::Serialize {
     /// The data structure for presence updates (e.g., cursor position, status)
     type Update: Serialize + for<'de> Deserialize<'de> + Clone + Debug + Send + Sync;
 

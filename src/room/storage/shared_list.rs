@@ -14,7 +14,7 @@ pub enum Operation<T> {
     Move { from: usize, to: usize },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SharedList<T> {
     items: Vec<T>,
     version: u64,
