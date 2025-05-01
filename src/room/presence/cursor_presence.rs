@@ -1,6 +1,6 @@
 use super::{PresenceLike, PresenceError};
 use serde::{Deserialize, Serialize};
-use std::time::{Instant, Duration};
+use std::time::Instant;
 
 // Example implementation for cursor presence:
 #[derive(Debug, Clone, Serialize)]

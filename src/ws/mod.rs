@@ -1,24 +1,19 @@
 use axum::{
     extract::{
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}, Path, State
-    }, http::{HeaderName, Method}, response::IntoResponse, routing::{delete, get, post}, Json, Router
+    }, response::IntoResponse
 };
 use futures_util::{
     SinkExt,
     StreamExt, // Add SplitSink/SplitStream
 };
-use tracing::{info, error};
 use std::{sync::Arc, time::Duration}; // Add Duration
 use tokio::{
     sync::Mutex,   // Add tokio::sync::Mutex
     time::Instant, // Add Instant, Interval
 };
 use uuid::Uuid;
-use crate::{api, room::{
-    error::RoomError, manager::RoomsManager, message::ClientMessageType, presence::cursor_presence::CursorPresence, storage::shared_list::SharedList, subscription::UserSubscription
-}, server::{ChatManager, ChatSubscription}}; // Assuming ws_rooms is in scope
-use std::{future::Future, net::SocketAddr};
-use tower_http::cors::{Any, CorsLayer};
+use crate::{room::message::ClientMessageType, server::{ChatManager, ChatSubscription}}; // Assuming ws_rooms is in scope
 
 
 // --- Configuration Constants (Server-side) ---

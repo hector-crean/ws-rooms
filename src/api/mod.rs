@@ -1,12 +1,4 @@
-use axum::{
-    extract::{Path, State},
-    response::IntoResponse,
-    routing::{get, post, delete},
-    Router,
-    Json,
-};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use uuid::Uuid;
 use crate::room::{
     manager::RoomsManager,

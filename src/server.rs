@@ -1,23 +1,13 @@
 use axum::{
-    extract::{
-        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}, Path, State
-    }, http::{HeaderName, Method}, response::IntoResponse, routing::{delete, get, post}, Json, Router
-};
-use futures_util::{
-    SinkExt,
-    StreamExt, // Add SplitSink/SplitStream
+    http::{HeaderName, Method}, routing::{delete, get, post}, Router
 };
 use tracing::{info, error};
-use std::{sync::Arc, time::Duration}; // Add Duration
-use tokio::{
-    sync::Mutex,   // Add tokio::sync::Mutex
-    time::Instant, // Add Instant, Interval
-};
+use std::sync::Arc; // Add Duration
 use uuid::Uuid;
 use crate::{api, room::{
-    error::RoomError, manager::RoomsManager, message::ClientMessageType, presence::cursor_presence::CursorPresence, storage::shared_list::SharedList, subscription::UserSubscription
+    manager::RoomsManager, presence::cursor_presence::CursorPresence, storage::shared_list::SharedList, subscription::UserSubscription
 }, ws::ws_handler}; // Assuming ws_rooms is in scope
-use std::{future::Future, net::SocketAddr};
+use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 
 
@@ -32,6 +22,12 @@ pub type ChatSubscription = UserSubscription<RoomId, ClientId, CursorPresence, S
 
 pub struct App {
     pub manager: Arc<ChatManager>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -57,14 +53,15 @@ impl App {
         // WebSocket route
         .route("/ws/room/{:room_id}", get(ws_handler))
         // Room management routes
-        .route("/rooms/:room_id/storage", get(api::storage::get_storage))
-        .route("/rooms/:room_id/storage", post(api::storage::initialize_storage))
-        .route("/rooms/:room_id/storage", delete(api::storage::delete_storage))
-        .route("/rooms", get(api::rooms::list_rooms))
-        .route("/rooms/:room_id", get(api::rooms::get_room))
-        .route("/rooms/:room_id", post(api::rooms::create_room))
-        .route("/rooms/:room_id", delete(api::rooms::delete_room))
-        .route("/rooms/:room_id/presence", get(api::presence::get_presence))
+        .route("/api/rooms", get(api::rooms::list_rooms))
+        .route("/api/rooms/{:room_id}", get(api::rooms::get_room))
+        .route("/api/rooms/{:room_id}", post(api::rooms::create_room))
+        .route("/api/rooms/{:room_id}", delete(api::rooms::delete_room))
+        .route("/api/rooms/{:room_id}/storage", get(api::storage::get_storage))
+        .route("/api/rooms/{:room_id}/storage", post(api::storage::initialize_storage))
+        .route("/api/rooms/{:room_id}/storage", delete(api::storage::delete_storage))
+        .route("/api/rooms/{:room_id}/presence", get(api::presence::get_presence))
+        .layer(cors)
         .with_state(self.manager.clone());
 
         let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], port));

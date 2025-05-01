@@ -1,8 +1,6 @@
 use axum::{
     extract::{Path, State},
     response::IntoResponse,
-    routing::get,
-    Router,
     Json,
 };
 use chrono::{DateTime, Utc};
