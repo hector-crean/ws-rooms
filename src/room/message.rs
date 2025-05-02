@@ -4,13 +4,17 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{presence::{cursor_presence::CursorPresence, PresenceLike}, storage::{SharedList, StorageLike, YrsStorage}, ClientIdLike, RoomIdLike};
+use super::{
+    ClientIdLike, RoomIdLike,
+    presence::{PresenceLike, cursor_presence::CursorPresence},
+    storage::{SharedPresentation, StorageLike},
+};
 use crate::room::error::RoomError;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
 #[serde(tag = "type", content = "data")]
 pub enum ClientMessageType<RoomId, ClientId, Presence, Storage>
 where
@@ -36,22 +40,40 @@ where
     _Phantom(std::marker::PhantomData<ClientId>),
 }
 
-impl<RoomId: RoomIdLike + TS, ClientId: ClientIdLike + TS, Storage: StorageLike + TS, Presence: PresenceLike + TS> ClientMessageType<RoomId, ClientId, Presence, Storage> {
-    pub fn process(&self) -> Result<ServerMessageType<RoomId, ClientId, Presence, Storage>, RoomError> {
-     Err(RoomError::InvalidMessage)
-    }
- }
-
-impl<RoomId: RoomIdLike + TS, ClientId: ClientIdLike + TS, Storage: StorageLike + TS, Presence: PresenceLike + TS> 
-    TryInto<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage> {
-    type Error = serde_json::Error;
-    fn try_into(self) -> Result<Utf8Bytes, Self::Error> {
-        serde_json::to_string(&self).map(Utf8Bytes::from)   
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
+    pub fn process(
+        &self,
+    ) -> Result<ServerMessageType<RoomId, ClientId, Presence, Storage>, RoomError> {
+        Err(RoomError::InvalidMessage)
     }
 }
 
-impl<RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS, ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS, Storage: StorageLike + TS, Presence: PresenceLike + TS> 
-    TryFrom<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage> {
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryInto<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
+    type Error = serde_json::Error;
+    fn try_into(self) -> Result<Utf8Bytes, Self::Error> {
+        serde_json::to_string(&self).map(Utf8Bytes::from)
+    }
+}
+
+impl<
+    RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS,
+    ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryFrom<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
     type Error = serde_json::Error;
     fn try_from(bytes: Utf8Bytes) -> Result<Self, Self::Error> {
         serde_json::from_str(bytes.as_str())
@@ -61,7 +83,7 @@ impl<RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS, ClientId: ClientIdLike +
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "data")]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
 pub enum ServerMessageType<RoomId, ClientId, Presence: PresenceLike, Storage: StorageLike>
 where
     RoomId: RoomIdLike + TS,
@@ -107,20 +129,28 @@ where
     // just sating stoage updated, which is just a prompt for the client to fetch the latest state.
 }
 
-impl<RoomId:  RoomIdLike + TS, ClientId: ClientIdLike + TS, Storage: StorageLike + TS, Presence: PresenceLike + TS> 
-    TryInto<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage> {
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryInto<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage>
+{
     type Error = serde_json::Error;
     fn try_into(self) -> Result<Utf8Bytes, Self::Error> {
-        serde_json::to_string(&self).map(Utf8Bytes::from)   
+        serde_json::to_string(&self).map(Utf8Bytes::from)
     }
 }
 
-impl<RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS, ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS, Storage: StorageLike + TS, Presence: PresenceLike + TS> 
-    TryFrom<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage> {
+impl<
+    RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS,
+    ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryFrom<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage>
+{
     type Error = serde_json::Error;
     fn try_from(bytes: Utf8Bytes) -> Result<Self, Self::Error> {
         serde_json::from_str(bytes.as_str())
     }
 }
-
-

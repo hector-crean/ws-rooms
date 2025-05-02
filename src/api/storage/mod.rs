@@ -1,37 +1,59 @@
+use crate::room::error::RoomError;
+use crate::room::storage::{SharedPresentation, StorageLike};
+use crate::{
+    api::ErrorResponse,
+    room::{ClientIdLike, RoomIdLike, manager::RoomsManager, presence::PresenceLike},
+    server::ChatManager,
+};
 use axum::{
+    Json,
     extract::{Path, State},
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::{api::ErrorResponse, room::{manager::RoomsManager, presence::PresenceLike, ClientIdLike, RoomIdLike}, server::ChatManager};
-use crate::room::storage::{StorageLike, YrsStorage};
+use ts_rs::TS;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StorageDocument<Storage: StorageLike> {
-    pub data: serde_json::Value,
+#[derive(Debug, TS, Serialize)]
+#[ts(export)]
+#[ts(concrete(Storage = SharedPresentation))]
+pub struct StorageDocumentResponse<Storage: StorageLike> {
+    pub data: Storage,
     pub version: Storage::Version,
+}
+
+impl<'de, Storage: StorageLike> Deserialize<'de> for StorageDocumentResponse<Storage> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let (data, version) = Deserialize::deserialize(deserializer)?;
+        Ok(StorageDocumentResponse { data, version })
+    }
 }
 
 /// GET /rooms/:room_id/storage
 /// Get storage document
-pub async fn get_storage<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+pub async fn get_storage<
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+>(
     State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
-) -> impl IntoResponse {
+) -> Result<Json<StorageDocumentResponse<Storage>>, RoomError> {
     match manager.get_room_details(&room_id.into()).await {
         Ok(details) => {
             let storage = details.storage.clone();
-            Json(StorageDocument::<Storage> {
-                data: serde_json::to_value(storage.clone()).unwrap_or_default(),
-                version: storage.version(),
-            }).into_response()
-        },
-        Err(e) => (
-            axum::http::StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("RoomNotFound", &e.to_string())),
-        ).into_response(),
+            let version = storage.version();
+            let document = StorageDocumentResponse::<Storage> {
+                data: storage,
+                version,
+            };
+            Ok(Json(document))
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -42,7 +64,12 @@ pub struct InitializeStorageRequest {
 
 /// POST /rooms/:room_id/storage
 /// Initialize storage document
-pub async fn initialize_storage<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+pub async fn initialize_storage<
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+>(
     State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
     Json(payload): Json<InitializeStorageRequest>,
@@ -51,17 +78,24 @@ pub async fn initialize_storage<RoomId: RoomIdLike, ClientId: ClientIdLike, Pres
         true => (
             axum::http::StatusCode::CREATED,
             Json(serde_json::json!({ "success": true })),
-        ).into_response(),
+        )
+            .into_response(),
         false => (
             axum::http::StatusCode::OK,
             Json(serde_json::json!({ "success": true })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
 /// DELETE /rooms/:room_id/storage
 /// Delete storage document
-pub async fn delete_storage<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence: PresenceLike, Storage: StorageLike>(
+pub async fn delete_storage<
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+>(
     State(manager): State<Arc<RoomsManager<RoomId, ClientId, Presence, Storage>>>,
     Path(room_id): Path<String>,
 ) -> impl IntoResponse {
@@ -69,14 +103,17 @@ pub async fn delete_storage<RoomId: RoomIdLike, ClientId: ClientIdLike, Presence
         Ok(true) => (
             axum::http::StatusCode::OK,
             Json(serde_json::json!({ "success": true })),
-        ).into_response(),
+        )
+            .into_response(),
         Ok(false) => (
             axum::http::StatusCode::NOT_FOUND,
             Json(ErrorResponse::new("RoomNotFound", "Room not found")),
-        ).into_response(),
+        )
+            .into_response(),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse::new("InternalError", &e.to_string())),
-        ).into_response(),
+        )
+            .into_response(),
     }
-} 
+}

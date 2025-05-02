@@ -1,9 +1,7 @@
-pub mod shared_list;
-pub mod yrs_storage;
+pub mod shared_presentation;
 
-pub use shared_list::SharedList;
+pub use shared_presentation::SharedPresentation;
 use ts_rs::TS;
-pub use yrs_storage::YrsStorage;
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -31,16 +29,25 @@ pub enum StorageError {
     // Add other specific storage errors as needed
 }
 
-pub trait StorageLike: Default + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>+ Debug + TS {
+pub trait StorageLike:
+    Default + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + Debug + TS
+{
     type Version: Debug + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + TS;
-    type Operation: Debug + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + TS;
+    type Operation: Debug
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + TS;
+    // type Item: From<Self> + Into<Self>;
 
     fn version(&self) -> Self::Version;
-    fn apply_operation(&mut self, operation: Self::Operation) -> Result<Self::Version, StorageError>;
+    fn apply_operation(
+        &mut self,
+        operation: Self::Operation,
+    ) -> Result<Self::Version, StorageError>;
     fn merge(&mut self, other: &Self) -> Result<(), StorageError>;
+    // fn item(&self) -> Self::Item;
 }
-
-
-
-
-

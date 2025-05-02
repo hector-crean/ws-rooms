@@ -1,16 +1,10 @@
+use crate::room::{manager::RoomsManager, presence::cursor_presence::CursorPresence};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::room::{
-    manager::RoomsManager,
-    presence::cursor_presence::CursorPresence,
-    storage::shared_list::SharedList,
-};
 
+pub mod presence;
 pub mod rooms;
 pub mod storage;
-pub mod presence;
-
-
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
@@ -26,5 +20,3 @@ impl ErrorResponse {
         }
     }
 }
-
-

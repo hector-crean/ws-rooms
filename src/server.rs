@@ -1,10 +1,8 @@
 use crate::{
     api,
     room::{
-        manager::RoomsManager,
-        presence::cursor_presence::CursorPresence,
-        storage::{YrsStorage, shared_list::SharedList},
-        subscription::UserSubscription,
+        manager::RoomsManager, presence::cursor_presence::CursorPresence,
+        storage::shared_presentation::SharedPresentation, subscription::UserSubscription,
     },
     ws::ws_handler,
 }; // Assuming ws_rooms is in scope
@@ -22,9 +20,14 @@ use uuid::Uuid;
 pub type ClientId = Uuid;
 pub type RoomId = String;
 
-// Your existing ChatManager/ChatSubscription types
-pub type ChatManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedList<String>>;
-pub type ChatSubscription = UserSubscription<RoomId, ClientId, CursorPresence, SharedList<String>>;
+// Define a new presentation-specific manager type
+pub type PresentationManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedPresentation>;
+pub type PresentationSubscription =
+    UserSubscription<RoomId, ClientId, CursorPresence, SharedPresentation>;
+
+// Keep the existing chat manager for backward compatibility
+pub type ChatManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedPresentation>;
+pub type ChatSubscription = UserSubscription<RoomId, ClientId, CursorPresence, SharedPresentation>;
 
 pub struct App {
     pub manager: Arc<ChatManager>,
@@ -39,6 +42,19 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         let manager = Arc::new(ChatManager::new());
+
+        let manager_clone = manager.clone();
+
+        tokio::spawn(async move {
+            let cleanup_interval = std::time::Duration::from_secs(30);
+            let mut interval = tokio::time::interval(cleanup_interval);
+
+            loop {
+                interval.tick().await;
+                manager_clone.cleanup_disconnected_clients().await;
+            }
+        });
+
         Self { manager }
     }
     pub async fn run(&self, port: u16) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,8 +67,16 @@ impl App {
                 Method::PATCH,
                 Method::PUT,
             ])
-            // allow the Content-Type header
-            .allow_headers([HeaderName::from_static("content-type")])
+            // allow the Content-Type header and other headers needed for WebSockets
+            .allow_headers([
+                HeaderName::from_static("content-type"),
+                HeaderName::from_static("upgrade"),
+                HeaderName::from_static("connection"),
+                HeaderName::from_static("sec-websocket-key"),
+                HeaderName::from_static("sec-websocket-version"),
+                HeaderName::from_static("sec-websocket-extensions"),
+                HeaderName::from_static("sec-websocket-protocol"),
+            ])
             // allow requests from any origin
             .allow_origin(Any);
 

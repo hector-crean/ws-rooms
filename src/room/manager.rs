@@ -1,24 +1,23 @@
 // --- Updated RoomsManager ---
 
-use std::{collections::HashMap, sync::Arc};
 use chrono::Utc;
-use tokio::sync::broadcast;
-use tokio::sync::RwLock;
 use serde;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 use ts_rs::TS;
 use uuid::Uuid;
 
+use super::DEFAULT_CHANNEL_CAPACITY;
 use super::error::RoomError;
 use super::message::ClientMessageType;
 use super::message::ServerMessageType;
+use super::storage::SharedPresentation;
 use super::subscription::UserSubscription;
-use super::DEFAULT_CHANNEL_CAPACITY;
 use super::{
-    presence::{PresenceLike, cursor_presence::CursorPresence}, 
-    storage::{StorageLike, shared_list::SharedList}, 
-    ClientIdLike, 
-    Room, 
-    RoomIdLike
+    ClientIdLike, Room, RoomIdLike,
+    presence::{PresenceLike, cursor_presence::CursorPresence},
+    storage::StorageLike,
 };
 
 #[derive(Debug)]
@@ -34,7 +33,7 @@ where
         HashMap<
             ClientId,
             broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>,
-        >
+        >,
     >,
     client_rooms: RwLock<HashMap<ClientId, RoomId>>,
 }
@@ -54,7 +53,14 @@ where
         }
     }
 
-    pub fn user_channels(&self) -> &RwLock<HashMap<ClientId, broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>>> {
+    pub fn user_channels(
+        &self,
+    ) -> &RwLock<
+        HashMap<
+            ClientId,
+            broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>,
+        >,
+    > {
         &self.user_channels
     }
 
@@ -70,7 +76,8 @@ where
         let room = self.get_room(&room_id).await?;
 
         // Apply the presence update
-        room.handle_presence_update(client_id.clone(), update.clone()).await?;
+        room.handle_presence_update(client_id.clone(), update.clone())
+            .await?;
 
         // Broadcast the update to all clients in the room
         tracing::debug!(%client_id, %room_id, ?update, "Broadcasting presence update");
@@ -83,7 +90,8 @@ where
             },
             client_id,
             &room_id,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -99,7 +107,7 @@ where
         // Apply storage operations and collect successful ones
         let mut storage = room.storage.write().await;
         let mut applied_ops = Vec::new();
-        
+
         for op in operations {
             match storage.apply_operation(op.clone()) {
                 Ok(_) => {
@@ -122,7 +130,8 @@ where
                 },
                 client_id,
                 &room_id,
-            ).await?;
+            )
+            .await?;
         }
 
         Ok(())
@@ -137,22 +146,22 @@ where
             ClientMessageType::JoinRoom { room_id } => {
                 tracing::info!(%client_id, %room_id, "Client joining room");
                 self.join_room(&room_id, client_id).await
-            },
+            }
             ClientMessageType::LeaveRoom => {
                 let room_id = self.get_client_room_id(client_id).await?;
                 tracing::info!(%client_id, %room_id, "Client leaving room");
                 self.leave_room(&room_id, client_id).await
-            },
+            }
             ClientMessageType::UpdatedPresence { presence } => {
                 tracing::debug!(%client_id, ?presence, "Client updating presence");
                 self.handle_presence_update(client_id, presence).await?;
                 Ok(())
-            },
+            }
             ClientMessageType::UpdatedStorage { operations } => {
                 tracing::debug!(%client_id, operation_count = operations.len(), "Client updating storage");
                 self.handle_storage_update(client_id, operations).await?;
                 Ok(())
-            },
+            }
             _ => {
                 let room_id = self.get_client_room_id(client_id).await?;
                 let room = self.get_room(&room_id).await?;
@@ -160,14 +169,14 @@ where
                 tracing::debug!(%client_id, %room_id, ?message, "Processing client message");
                 if let Some(server_msg) = room.process_client_message(client_id, message).await? {
                     tracing::debug!(%client_id, %room_id, ?server_msg, "Broadcasting server message");
-                    self.broadcast_message(&room, server_msg, client_id, &room_id).await?;
+                    self.broadcast_message(&room, server_msg, client_id, &room_id)
+                        .await?;
                 }
 
                 Ok(())
             }
         }
     }
-
 
     /// Creates a new room with the given ID or returns the existing one.
     /// If created, uses the specified capacity or a default.
@@ -235,7 +244,6 @@ where
         // But the current approach allows multiple independent handles if needed.
     }
 
-
     /// Sends a message to all clients in a specific room.
     /// Fails if the room does not exist.
     pub async fn send_message_to_room(
@@ -251,16 +259,16 @@ where
     /// Cleans up a user, removing them from all rooms and their user channel map entry *if*
     /// this is the last reference (tracked implicitly by Arc on the Room and Sender).
     /// Called automatically when `UserSubscription` is dropped.
-    pub fn cleanup_user(&self, client_id: &ClientId) {
-        // Use blocking operations as this is called from Drop
-        let rooms_guard = self.rooms.blocking_read();
+    pub async fn cleanup_user(&self, client_id: &ClientId) {
+        // Use async operations instead of blocking ones
+        let rooms_guard = self.rooms.read().await;
         for room in rooms_guard.values() {
-            room.blocking_leave(client_id);
+            room.leave(client_id).await;
         }
         drop(rooms_guard);
 
         // Clean up client_rooms mapping
-        let _ = self.client_rooms.blocking_write().remove(client_id);
+        let _ = self.client_rooms.write().await.remove(client_id);
 
         // Remove user channel sender *only if we're sure no other handles exist*.
         // The broadcast channel itself handles receiver cleanup.
@@ -321,7 +329,10 @@ where
     }
 
     /// Helper method to get a room by ID with proper error handling
-    pub async fn get_room(&self, room_id: &RoomId) -> Result<Arc<Room<RoomId, ClientId, Presence, Storage>>, RoomError> {
+    pub async fn get_room(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<Arc<Room<RoomId, ClientId, Presence, Storage>>, RoomError> {
         let rooms_guard = self.rooms.read().await;
         rooms_guard
             .get(room_id)
@@ -339,7 +350,11 @@ where
     }
 
     /// Helper method to get a user's sender channel
-    pub async fn get_user_sender(&self, client_id: &ClientId) -> Result<broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>, RoomError> {
+    pub async fn get_user_sender(
+        &self,
+        client_id: &ClientId,
+    ) -> Result<broadcast::Sender<ServerMessageType<RoomId, ClientId, Presence, Storage>>, RoomError>
+    {
         let user_channels_guard = self.user_channels.read().await;
         user_channels_guard
             .get(client_id)
@@ -355,15 +370,12 @@ where
         client_id: &ClientId,
         room_id: &RoomId,
     ) -> Result<(), RoomError> {
-        room.broadcast(message)
-            .map_err(|e| {
-                tracing::error!(%client_id, %room_id, error = %e, "Failed to broadcast message");
-                RoomError::MessageSendFail(Box::new(e))
-            })?;
+        room.broadcast(message).map_err(|e| {
+            tracing::error!(%client_id, %room_id, error = %e, "Failed to broadcast message");
+            RoomError::MessageSendFail(Box::new(e))
+        })?;
         Ok(())
     }
-
-   
 
     pub async fn join_room(&self, room_id: &RoomId, client_id: &ClientId) -> Result<(), RoomError> {
         let room = self.get_room(room_id).await?;
@@ -385,7 +397,11 @@ where
         Ok(())
     }
 
-    pub async fn leave_room(&self, room_id: &RoomId, client_id: &ClientId) -> Result<(), RoomError> {
+    pub async fn leave_room(
+        &self,
+        room_id: &RoomId,
+        client_id: &ClientId,
+    ) -> Result<(), RoomError> {
         let room = self.get_room(room_id).await?;
 
         // Remove from client_rooms mapping
@@ -439,7 +455,10 @@ where
 
     /// Gets detailed information about a specific room.
     /// Returns an error if the room doesn't exist.
-    pub async fn get_room_details(&self, room_id: &RoomId) -> Result<RoomDetails<RoomId, ClientId, Presence, Storage>, RoomError> {
+    pub async fn get_room_details(
+        &self,
+        room_id: &RoomId,
+    ) -> Result<RoomDetails<RoomId, ClientId, Presence, Storage>, RoomError> {
         let rooms_guard = self.rooms.read().await;
         let room = rooms_guard
             .get(room_id)
@@ -451,7 +470,7 @@ where
         // Collect client IDs and their presences
         let mut client_presences = HashMap::new();
         let mut client_ids = Vec::with_capacity(clients_guard.len());
-        
+
         for (client_id, client_state) in clients_guard.iter() {
             client_ids.push(client_id.clone());
             client_presences.insert(client_id.clone(), client_state.presence().clone());
@@ -467,7 +486,9 @@ where
     }
 
     /// Lists all rooms with their basic information.
-    pub async fn list_rooms_with_details(&self) -> Vec<RoomDetails<RoomId, ClientId, Presence, Storage>> {
+    pub async fn list_rooms_with_details(
+        &self,
+    ) -> Vec<RoomDetails<RoomId, ClientId, Presence, Storage>> {
         let rooms_guard = self.rooms.read().await;
         let mut details = Vec::with_capacity(rooms_guard.len());
 
@@ -478,7 +499,7 @@ where
             // Collect client IDs and their presences
             let mut client_presences = HashMap::new();
             let mut client_ids = Vec::with_capacity(clients_guard.len());
-            
+
             for (client_id, client_state) in clients_guard.iter() {
                 client_ids.push(client_id.clone());
                 client_presences.insert(client_id.clone(), client_state.presence().clone());
@@ -503,14 +524,68 @@ where
         if let Some(room_arc) = rooms_guard.remove(room_id) {
             // Clear the room's resources
             room_arc.clear().await;
-            
+
             // Remove all client-room mappings for this room
             let mut client_rooms_guard = self.client_rooms.write().await;
             client_rooms_guard.retain(|_, r| r != room_id);
-            
+
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+    pub async fn cleanup_disconnected_clients(&self) {
+        // Get all clients that have a room mapping but no active channel
+        let disconnected_clients = {
+            let client_rooms = self.client_rooms.read().await;
+            let user_channels = self.user_channels.read().await;
+
+            client_rooms
+                .keys()
+                .filter(|client_id| !user_channels.contains_key(*client_id))
+                .cloned()
+                .collect::<Vec<ClientId>>()
+        };
+
+        // Process each disconnected client
+        for client_id in disconnected_clients {
+            tracing::info!(%client_id, "Cleaning up disconnected client");
+
+            // Get the room this client was in
+            let room_id = {
+                let client_rooms = self.client_rooms.read().await;
+                match client_rooms.get(&client_id) {
+                    Some(room_id) => room_id.clone(),
+                    None => continue, // Client no longer has a room mapping
+                }
+            };
+
+            // Get the room and remove the client
+            if let Ok(room) = self.get_room(&room_id).await {
+                // Remove client from room
+                room.leave(&client_id).await;
+
+                // Remove client-room mapping
+                {
+                    let mut client_rooms_guard = self.client_rooms.write().await;
+                    client_rooms_guard.remove(&client_id);
+                }
+
+                // Broadcast that the client has left
+                let _ = self
+                    .broadcast_message(
+                        &room,
+                        ServerMessageType::RoomLeft {
+                            room_id: room_id.clone(),
+                            client_id: client_id.clone(),
+                        },
+                        &client_id,
+                        &room_id,
+                    )
+                    .await;
+
+                tracing::info!(%client_id, %room_id, "Client removed from room");
+            }
         }
     }
 }
@@ -518,7 +593,7 @@ where
 /// Detailed information about a room
 #[derive(Debug, Clone, serde::Serialize, TS)]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedList<String>))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage =  SharedPresentation))]
 pub struct RoomDetails<RoomId, ClientId, Presence, Storage>
 where
     RoomId: RoomIdLike + serde::Serialize,
