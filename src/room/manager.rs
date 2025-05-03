@@ -76,7 +76,7 @@ where
         let room = self.get_room(&room_id).await?;
 
         // Apply the presence update
-        room.handle_presence_update(client_id.clone(), update.clone())
+        room.handle_presence_update(*client_id, update.clone())
             .await?;
 
         // Broadcast the update to all clients in the room
@@ -84,7 +84,7 @@ where
         self.broadcast_message(
             &room,
             ServerMessageType::PresenceUpdated {
-                client_id: client_id.clone(),
+                client_id: *client_id,
                 timestamp: Utc::now(),
                 presence: update,
             },
@@ -221,7 +221,7 @@ where
         let channel_capacity = capacity.unwrap_or(DEFAULT_CHANNEL_CAPACITY);
 
         let sender = user_channels_guard
-            .entry(client_id.clone())
+            .entry(client_id)
             .or_insert_with(|| {
                 // Optional: Log user initialization
                 // println!("Initializing user channel for: {}", client_id);
@@ -390,10 +390,10 @@ where
                     old_room_id.to_string(),
                 ));
             }
-            client_rooms_guard.insert(client_id.clone(), room_id.clone());
+            client_rooms_guard.insert(*client_id, room_id.clone());
         }
 
-        room.join(client_id.clone(), user_sender).await;
+        room.join(*client_id, user_sender).await;
         Ok(())
     }
 
@@ -446,10 +446,10 @@ where
                     old_room_id.to_string(),
                 ));
             }
-            client_rooms_guard.insert(client_id.clone(), room_id.clone());
+            client_rooms_guard.insert(*client_id, room_id.clone());
         }
 
-        room.join(client_id.clone(), user_sender).await;
+        room.join(*client_id, user_sender).await;
         Ok(())
     }
 
@@ -472,8 +472,8 @@ where
         let mut client_ids = Vec::with_capacity(clients_guard.len());
 
         for (client_id, client_state) in clients_guard.iter() {
-            client_ids.push(client_id.clone());
-            client_presences.insert(client_id.clone(), client_state.presence().clone());
+            client_ids.push(*client_id);
+            client_presences.insert(*client_id, client_state.presence().clone());
         }
 
         Ok(RoomDetails {
@@ -501,8 +501,8 @@ where
             let mut client_ids = Vec::with_capacity(clients_guard.len());
 
             for (client_id, client_state) in clients_guard.iter() {
-                client_ids.push(client_id.clone());
-                client_presences.insert(client_id.clone(), client_state.presence().clone());
+                client_ids.push(*client_id);
+                client_presences.insert(*client_id, client_state.presence().clone());
             }
 
             details.push(RoomDetails {
@@ -577,7 +577,7 @@ where
                         &room,
                         ServerMessageType::RoomLeft {
                             room_id: room_id.clone(),
-                            client_id: client_id.clone(),
+                            client_id,
                         },
                         &client_id,
                         &room_id,

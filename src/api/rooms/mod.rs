@@ -7,7 +7,6 @@ use crate::{
         presence::{PresenceLike, cursor_presence::CursorPresence},
         storage::{SharedPresentation, StorageLike},
     },
-    server::{ChatManager, ClientId, RoomId},
 };
 use axum::{
     Json,

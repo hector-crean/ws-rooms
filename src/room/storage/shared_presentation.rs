@@ -120,21 +120,13 @@ pub enum PresentationOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
+#[derive(Default)]
 pub struct SharedPresentation {
     slides: Vec<Slide>,
     current_slide_index: usize,
     version: u64,
 }
 
-impl Default for SharedPresentation {
-    fn default() -> Self {
-        Self {
-            slides: Vec::new(),
-            current_slide_index: 0,
-            version: 0,
-        }
-    }
-}
 
 impl StorageLike for SharedPresentation {
     type Operation = PresentationOperation;

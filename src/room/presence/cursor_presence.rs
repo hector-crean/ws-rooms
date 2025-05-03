@@ -2,7 +2,6 @@ use super::{PresenceLike, PresenceError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use std::time::Instant;
 
 // Example implementation for cursor presence:
 #[derive(Debug, Clone, Serialize, TS, Deserialize)]

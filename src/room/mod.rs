@@ -216,10 +216,10 @@ where
         match msg {
             ClientMessageType::UpdatedPresence { presence } => {
                 // Handle presence update
-                self.handle_presence_update(client_id.clone(), presence.clone()).await?;
+                self.handle_presence_update(*client_id, presence.clone()).await?;
                 
                 Ok(Some(ServerMessageType::PresenceUpdated {
-                    client_id: client_id.clone(),
+                    client_id: *client_id,
                     timestamp: Utc::now(),
                     presence,
                 }))
@@ -251,7 +251,7 @@ where
             ClientMessageType::JoinRoom { room_id } => {
                 Ok(Some(ServerMessageType::RoomJoined {
                     room_id,
-                    client_id: client_id.clone(),
+                    client_id: *client_id,
                 }))
             },
             

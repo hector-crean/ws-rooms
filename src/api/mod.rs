@@ -1,6 +1,4 @@
-use crate::room::{manager::RoomsManager, presence::cursor_presence::CursorPresence};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 pub mod presence;
 pub mod rooms;

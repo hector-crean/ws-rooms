@@ -3,7 +3,6 @@ use crate::room::storage::{SharedPresentation, StorageLike};
 use crate::{
     api::ErrorResponse,
     room::{ClientIdLike, RoomIdLike, manager::RoomsManager, presence::PresenceLike},
-    server::ChatManager,
 };
 use axum::{
     Json,
