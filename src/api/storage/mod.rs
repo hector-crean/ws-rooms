@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use ts_rs::TS;
 
-#[derive(Debug, TS, Serialize)]
+#[derive(Debug, TS, Serialize, Deserialize)]
 #[ts(export)]
 #[ts(concrete(Storage = SharedPresentation))]
 pub struct StorageDocumentResponse<Storage: StorageLike> {
@@ -21,15 +21,15 @@ pub struct StorageDocumentResponse<Storage: StorageLike> {
     pub version: Storage::Version,
 }
 
-impl<'de, Storage: StorageLike> Deserialize<'de> for StorageDocumentResponse<Storage> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let (data, version) = Deserialize::deserialize(deserializer)?;
-        Ok(StorageDocumentResponse { data, version })
-    }
-}
+// impl<'de, Storage: StorageLike> Deserialize<'de> for StorageDocumentResponse<Storage> {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: serde::Deserializer<'de>,
+//     {
+//         let (data, version) = Deserialize::deserialize(deserializer)?;
+//         Ok(StorageDocumentResponse { data, version })
+//     }
+// }
 
 /// GET /rooms/:room_id/storage
 /// Get storage document

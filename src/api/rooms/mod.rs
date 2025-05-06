@@ -4,7 +4,7 @@ use crate::{
         ClientIdLike, RoomIdLike,
         error::RoomError,
         manager::{RoomDetails, RoomsManager},
-        presence::{PresenceLike, cursor_presence::CursorPresence},
+        presence::{PresenceLike, presentation_presence::PresentationPresence},
         storage::{SharedPresentation, StorageLike},
     },
 };
@@ -25,7 +25,7 @@ pub struct CreateRoomRequest {
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
 #[ts(export)]
 pub struct ListRoomsResponse<
     RoomId: RoomIdLike,
@@ -51,7 +51,7 @@ pub async fn list_rooms<
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
 #[ts(export)]
 pub struct GetRoomResponse<
     RoomId: RoomIdLike,

@@ -3,7 +3,7 @@ pub mod shared_presentation;
 pub use shared_presentation::SharedPresentation;
 use ts_rs::TS;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fmt::Debug;
 
 #[derive(thiserror::Error, Debug)]
@@ -30,16 +30,16 @@ pub enum StorageError {
 }
 
 pub trait StorageLike:
-    Default + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + Debug + TS
+    Default + Clone + Send + Sync + 'static + Serialize + Debug + TS
 {
-    type Version: Debug + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + TS;
+    type Version: Debug + Clone + Send + Sync + 'static + Serialize + DeserializeOwned + TS;
     type Operation: Debug
         + Clone
         + Send
         + Sync
         + 'static
         + Serialize
-        + for<'de> Deserialize<'de>
+        + DeserializeOwned
         + TS;
     // type Item: From<Self> + Into<Self>;
 

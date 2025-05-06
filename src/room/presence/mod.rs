@@ -1,8 +1,8 @@
-pub mod cursor_presence;
+pub mod presentation_presence;
 
 use std::time::Duration;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use ts_rs::TS;
 use std::fmt::Debug;
 
@@ -13,15 +13,17 @@ pub enum PresenceError {
     InvalidUpdate(String),
     #[error("Stale update (older than current)")]
     StaleUpdate,
+    #[error("Client not found")]
+    ClientNotFound,
 }
 
 pub trait PresenceLike: Send + Sync + Clone + Debug + Default + 'static + serde::Serialize + TS {
     /// The data structure for presence updates (e.g., cursor position, status)
-    type Update: Serialize + for<'de> Deserialize<'de> + Clone + Debug + Send + Sync + TS;
+    type Update: Serialize + DeserializeOwned + Clone + Debug + Send + Sync + TS;
 
     /// Apply an update to the presence state
     /// Returns whether the state actually changed
-    fn apply_update(&mut self, update: Self::Update) -> Result<bool, PresenceError>;
+    fn apply_update(&mut self, update: Self::Update) -> Result<(bool, Self), PresenceError>;
 
     /// Get the last time this presence was updated
     fn last_updated(&self) -> DateTime<Utc>;
@@ -31,3 +33,4 @@ pub trait PresenceLike: Send + Sync + Clone + Debug + Default + 'static + serde:
         Utc::now().signed_duration_since(self.last_updated()) < chrono::Duration::from_std(timeout).unwrap()
     }
 }
+

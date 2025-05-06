@@ -1,10 +1,10 @@
 pub mod client_state;
+pub mod error;
+pub mod manager;
 pub mod message;
 pub mod presence;
 pub mod storage;
-pub mod error;
 pub mod subscription;
-pub mod manager;
 
 use std::{
     collections::HashMap,
@@ -13,6 +13,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use chrono::Utc;
 use client_state::ClientState;
 use error::RoomError;
 use message::{ClientMessageType, ServerMessageType};
@@ -20,7 +21,6 @@ use presence::{PresenceError, PresenceLike};
 use serde::Serialize;
 use storage::{StorageError, StorageLike};
 use tokio::sync::{RwLock, broadcast};
-use chrono::Utc;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -28,21 +28,28 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 100;
 
 // --- Error Enum ---
 
-
-
 pub trait RoomIdLike:
-    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug + TS + From<String> 
+    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug + TS + From<String>
 {
 }
 pub trait ClientIdLike:
-    Eq + Hash + Clone + Send + Sync + 'static + fmt::Display + Serialize + Debug + TS + From<Uuid> + Copy
+    Eq
+    + Hash
+    + Clone
+    + Send
+    + Sync
+    + 'static
+    + fmt::Display
+    + Serialize
+    + Debug
+    + TS
+    + From<Uuid>
+    + Copy
 {
 }
 
-
 impl RoomIdLike for String {}
 impl ClientIdLike for Uuid {}
-
 
 // --- Room Structure ---
 
@@ -98,12 +105,17 @@ where
         &self,
         client_id: ClientId,
         update: Presence::Update,
-    ) -> Result<(), PresenceError> {
+    ) -> Result<Presence, PresenceError> {
         let mut clients_guard = self.clients.write().await;
-        if let Some(client_state) = clients_guard.get_mut(&client_id) {
-            client_state.presence_mut().apply_update(update)?;
+        match clients_guard.get_mut(&client_id) {
+            Some(client_state) => {
+                let (_, presence) = client_state.presence_mut().apply_update(update)?;
+                return Ok(presence);
+            }
+            None => {
+                return Err(PresenceError::ClientNotFound);
+            }
         }
-        Ok(())
     }
 
     /// Adds a client to the room, spawning a task to forward messages.
@@ -161,15 +173,6 @@ where
         }
     }
 
-    /// Blocking version of `leave` for use in synchronous contexts like `Drop`.
-    fn blocking_leave(&self, client_id: &ClientId) {
-        // Use blocking_write for sync context
-        let mut clients_guard = self.clients.blocking_write();
-        if let Some(client_state) = clients_guard.remove(client_id) {
-            client_state.forwarder().abort();
-            self.subscriber_count.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
 
     /// Aborts all client forwarding tasks and clears the client list.
     /// Used when removing the entire room.
@@ -205,8 +208,6 @@ where
         self.subscriber_count.load(Ordering::Relaxed)
     }
 
-
-
     // New method to handle incoming client messages
     async fn process_client_message(
         &self,
@@ -214,29 +215,31 @@ where
         msg: ClientMessageType<RoomId, ClientId, Presence, Storage>,
     ) -> Result<Option<ServerMessageType<RoomId, ClientId, Presence, Storage>>, RoomError> {
         match msg {
-            ClientMessageType::UpdatedPresence { presence } => {
+            ClientMessageType::UpdatePresence { presence } => {
                 // Handle presence update
-                self.handle_presence_update(*client_id, presence.clone()).await?;
-                
+                let updated_presence = self
+                    .handle_presence_update(*client_id, presence.clone())
+                    .await?;
+
                 Ok(Some(ServerMessageType::PresenceUpdated {
                     client_id: *client_id,
                     timestamp: Utc::now(),
-                    presence,
+                    presence: updated_presence,
                 }))
-            },
-            
-            ClientMessageType::UpdatedStorage { operations } => {
+            }
+
+            ClientMessageType::UpdateStorage { operations } => {
                 // Get current storage version before applying operations
                 let mut storage = self.storage.write().await;
                 let mut applied_ops = Vec::new();
-                
+
                 // Apply each operation and collect successful ones
                 for op in operations {
                     if let Ok(version) = storage.apply_operation(op.clone()) {
                         applied_ops.push(op);
                     }
                 }
-                
+
                 // Only broadcast if we have successful operations
                 if !applied_ops.is_empty() {
                     Ok(Some(ServerMessageType::StorageUpdated {
@@ -246,25 +249,20 @@ where
                 } else {
                     Ok(None)
                 }
-            },
-            
-            ClientMessageType::JoinRoom { room_id } => {
-                Ok(Some(ServerMessageType::RoomJoined {
-                    room_id,
-                    client_id: *client_id,
-                }))
-            },
-            
+            }
+
+            ClientMessageType::JoinRoom { room_id } => Ok(Some(ServerMessageType::RoomJoined {
+                room_id,
+                client_id: *client_id,
+            })),
+
             ClientMessageType::LeaveRoom => {
                 // Note: This requires access to the RoomsManager, so we should move this logic
                 // to the RoomsManager's handle_client_message method instead
                 Err(RoomError::InvalidMessage)
-            },
-            
+            }
+
             ClientMessageType::_Phantom(_) => unreachable!(),
         }
     }
 }
-
-
-

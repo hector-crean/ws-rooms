@@ -1,12 +1,12 @@
 use axum::extract::ws::Utf8Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{
     ClientIdLike, RoomIdLike,
-    presence::{PresenceLike, cursor_presence::CursorPresence},
+    presence::{PresenceLike, presentation_presence::PresentationPresence},
     storage::{SharedPresentation, StorageLike},
 };
 use crate::room::error::RoomError;
@@ -14,7 +14,7 @@ use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
 #[serde(tag = "type", content = "data")]
 pub enum ClientMessageType<RoomId, ClientId, Presence, Storage>
 where
@@ -29,10 +29,10 @@ where
         room_id: RoomId,
     },
     LeaveRoom,
-    UpdatedPresence {
+    UpdatePresence {
         presence: Presence::Update,
     },
-    UpdatedStorage {
+    UpdateStorage {
         operations: Vec<Storage::Operation>,
     },
     // Add a marker variant to use ClientId
@@ -80,16 +80,16 @@ impl<
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, TS, Deserialize)]
 #[serde(tag = "type", content = "data")]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage = SharedPresentation))]
-pub enum ServerMessageType<RoomId, ClientId, Presence: PresenceLike, Storage: StorageLike>
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
+pub enum ServerMessageType<RoomId, ClientId, Presence, Storage>
 where
-    RoomId: RoomIdLike + TS,
-    ClientId: ClientIdLike + TS,
-    Presence: PresenceLike + TS,
-    Storage: StorageLike + TS,
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
     Presence::Update: Send + Sync,
     Storage::Operation: Send + Sync,
 {
@@ -114,7 +114,7 @@ where
     PresenceUpdated {
         client_id: ClientId,
         timestamp: DateTime<Utc>,
-        presence: Presence::Update,
+        presence: Presence,
     },
     CommentCreated,
     CommentEdited,
@@ -142,11 +142,13 @@ impl<
     }
 }
 
+
+
 impl<
     RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS,
     ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS,
     Storage: StorageLike + TS,
-    Presence: PresenceLike + TS,
+    Presence: PresenceLike + TS + DeserializeOwned,
 > TryFrom<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage>
 {
     type Error = serde_json::Error;
@@ -154,3 +156,4 @@ impl<
         serde_json::from_str(bytes.as_str())
     }
 }
+

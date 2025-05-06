@@ -16,7 +16,7 @@ use super::storage::SharedPresentation;
 use super::subscription::UserSubscription;
 use super::{
     ClientIdLike, Room, RoomIdLike,
-    presence::{PresenceLike, cursor_presence::CursorPresence},
+    presence::{PresenceLike, presentation_presence::PresentationPresence},
     storage::StorageLike,
 };
 
@@ -76,18 +76,22 @@ where
         let room = self.get_room(&room_id).await?;
 
         // Apply the presence update
-        room.handle_presence_update(*client_id, update.clone())
+        let updated_presence = room.handle_presence_update(*client_id, update.clone())
             .await?;
 
+        
+        let msg = ServerMessageType::PresenceUpdated {
+            client_id: *client_id,
+            timestamp: Utc::now(),
+            presence: updated_presence,
+        };
+
+
         // Broadcast the update to all clients in the room
-        tracing::debug!(%client_id, %room_id, ?update, "Broadcasting presence update");
+        tracing::debug!(%client_id, %room_id, ?msg, "Broadcasting presence update");
         self.broadcast_message(
             &room,
-            ServerMessageType::PresenceUpdated {
-                client_id: *client_id,
-                timestamp: Utc::now(),
-                presence: update,
-            },
+            msg,
             client_id,
             &room_id,
         )
@@ -152,12 +156,12 @@ where
                 tracing::info!(%client_id, %room_id, "Client leaving room");
                 self.leave_room(&room_id, client_id).await
             }
-            ClientMessageType::UpdatedPresence { presence } => {
+            ClientMessageType::UpdatePresence { presence } => {
                 tracing::debug!(%client_id, ?presence, "Client updating presence");
                 self.handle_presence_update(client_id, presence).await?;
                 Ok(())
             }
-            ClientMessageType::UpdatedStorage { operations } => {
+            ClientMessageType::UpdateStorage { operations } => {
                 tracing::debug!(%client_id, operation_count = operations.len(), "Client updating storage");
                 self.handle_storage_update(client_id, operations).await?;
                 Ok(())
@@ -593,7 +597,7 @@ where
 /// Detailed information about a room
 #[derive(Debug, Clone, serde::Serialize, TS)]
 #[ts(export)]
-#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = CursorPresence, Storage =  SharedPresentation))]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage =  SharedPresentation))]
 pub struct RoomDetails<RoomId, ClientId, Presence, Storage>
 where
     RoomId: RoomIdLike + serde::Serialize,

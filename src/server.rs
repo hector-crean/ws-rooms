@@ -1,7 +1,7 @@
 use crate::{
     api,
     room::{
-        manager::RoomsManager, presence::cursor_presence::CursorPresence,
+        manager::RoomsManager, presence::presentation_presence::PresentationPresence,
         storage::shared_presentation::SharedPresentation, subscription::UserSubscription,
     },
     ws::ws_handler,
@@ -21,13 +21,13 @@ pub type ClientId = Uuid;
 pub type RoomId = String;
 
 // Define a new presentation-specific manager type
-pub type PresentationManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedPresentation>;
+pub type PresentationManager = RoomsManager<RoomId, ClientId, PresentationPresence, SharedPresentation>;
 pub type PresentationSubscription =
-    UserSubscription<RoomId, ClientId, CursorPresence, SharedPresentation>;
+    UserSubscription<RoomId, ClientId, PresentationPresence, SharedPresentation>;
 
 // Keep the existing chat manager for backward compatibility
-pub type ChatManager = RoomsManager<RoomId, ClientId, CursorPresence, SharedPresentation>;
-pub type ChatSubscription = UserSubscription<RoomId, ClientId, CursorPresence, SharedPresentation>;
+pub type ChatManager = RoomsManager<RoomId, ClientId, PresentationPresence, SharedPresentation>;
+pub type ChatSubscription = UserSubscription<RoomId, ClientId, PresentationPresence, SharedPresentation>;
 
 pub struct App {
     pub manager: Arc<ChatManager>,
