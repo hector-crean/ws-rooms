@@ -1,30 +1,98 @@
-use axum::{
-    Router,
-    extract::{
-        Path, State,
-        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+use axum::extract::ws::Utf8Bytes;
+use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::{
+    ClientIdLike, RoomIdLike,
+    presence::{PresenceLike, presentation_presence::PresentationPresence},
+    storage::{SharedPresentation, StorageLike},
+};
+use crate::room::error::RoomError;
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
+#[serde(tag = "type", content = "data")]
+pub enum ClientMessageType<RoomId, ClientId, Presence, Storage>
+where
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+    Presence::Update: Send + Sync,
+    Storage::Operation: Send + Sync,
+{
+    JoinRoom {
+        room_id: RoomId,
     },
-    response::IntoResponse,
-    routing::get,
-};
-use futures_util::{
-    SinkExt,
-    StreamExt,
-    stream::{SplitSink, SplitStream}, // Add SplitSink/SplitStream
-};
-use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration}; // Add Duration
-use tokio::{
-    sync::Mutex,               // Add tokio::sync::Mutex
-    time::{Instant, Interval}, // Add Instant, Interval
-};
+    LeaveRoom,
+    UpdatePresence {
+        presence: Presence::Update,
+    },
+    UpdateStorage {
+        operations: Vec<Storage::Operation>,
+    },
+    // Add a marker variant to use ClientId
+    #[serde(skip)]
+    _Phantom(std::marker::PhantomData<ClientId>),
+}
 
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
+    pub fn process(
+        &self,
+    ) -> Result<ServerMessageType<RoomId, ClientId, Presence, Storage>, RoomError> {
+        Err(RoomError::InvalidMessage)
+    }
+}
 
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryInto<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
+    type Error = serde_json::Error;
+    fn try_into(self) -> Result<Utf8Bytes, Self::Error> {
+        serde_json::to_string(&self).map(Utf8Bytes::from)
+    }
+}
 
+impl<
+    RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS,
+    ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryFrom<Utf8Bytes> for ClientMessageType<RoomId, ClientId, Presence, Storage>
+{
+    type Error = serde_json::Error;
+    fn try_from(bytes: Utf8Bytes) -> Result<Self, Self::Error> {
+        serde_json::from_str(bytes.as_str())
+    }
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ServerMessageType<RoomId, ClientId> {
+#[derive(Debug, Clone, Serialize, TS, Deserialize)]
+#[serde(tag = "type", content = "data")]
+#[ts(export)]
+#[ts(concrete(RoomId = String, ClientId = Uuid, Presence = PresentationPresence, Storage = SharedPresentation))]
+pub enum ServerMessageType<RoomId, ClientId, Presence, Storage>
+where
+    RoomId: RoomIdLike,
+    ClientId: ClientIdLike,
+    Presence: PresenceLike,
+    Storage: StorageLike,
+    Presence::Update: Send + Sync,
+    Storage::Operation: Send + Sync,
+{
     RoomCreated {
         room_id: RoomId,
     },
@@ -39,7 +107,15 @@ pub enum ServerMessageType<RoomId, ClientId> {
         room_id: RoomId,
         client_id: ClientId,
     },
-    StorageUpdated,
+    StorageUpdated {
+        version: Storage::Version,
+        operations: Vec<Storage::Operation>,
+    },
+    PresenceUpdated {
+        client_id: ClientId,
+        timestamp: DateTime<Utc>,
+        presence: Presence,
+    },
     CommentCreated,
     CommentEdited,
     CommentDeleted,
@@ -53,16 +129,31 @@ pub enum ServerMessageType<RoomId, ClientId> {
     // just sating stoage updated, which is just a prompt for the client to fetch the latest state.
 }
 
-impl<RoomId: Serialize, ClientId: Serialize> TryInto<Utf8Bytes> for ServerMessageType<RoomId, ClientId> {
+impl<
+    RoomId: RoomIdLike + TS,
+    ClientId: ClientIdLike + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS,
+> TryInto<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage>
+{
     type Error = serde_json::Error;
     fn try_into(self) -> Result<Utf8Bytes, Self::Error> {
-        serde_json::to_string(&self).map(Utf8Bytes::from)   
+        serde_json::to_string(&self).map(Utf8Bytes::from)
     }
 }
 
-impl<RoomId: for<'a> Deserialize<'a>, ClientId: for<'a> Deserialize<'a>> TryFrom<Utf8Bytes> for ServerMessageType<RoomId, ClientId> {
+
+
+impl<
+    RoomId: RoomIdLike + for<'a> Deserialize<'a> + TS,
+    ClientId: ClientIdLike + for<'a> Deserialize<'a> + TS,
+    Storage: StorageLike + TS,
+    Presence: PresenceLike + TS + DeserializeOwned,
+> TryFrom<Utf8Bytes> for ServerMessageType<RoomId, ClientId, Presence, Storage>
+{
     type Error = serde_json::Error;
     fn try_from(bytes: Utf8Bytes) -> Result<Self, Self::Error> {
         serde_json::from_str(bytes.as_str())
     }
 }
+

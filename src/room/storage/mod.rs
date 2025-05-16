@@ -1,9 +1,17 @@
-pub mod shared_list;
-use serde::{Deserialize, Serialize};
+pub mod shared_presentation;
+
+pub use shared_presentation::SharedPresentation;
+use ts_rs::TS;
+
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::fmt::Debug;
 
 #[derive(thiserror::Error, Debug)]
 pub enum StorageError {
+    #[error("Failed to apply operation: {0}")]
+    ApplyError(String),
+    #[error("Failed to merge states: {0}")]
+    MergeError(String),
     #[error("Merge conflict: {0}")]
     MergeConflict(String),
     #[error("Failed to apply diff: {0}")]
@@ -21,31 +29,25 @@ pub enum StorageError {
     // Add other specific storage errors as needed
 }
 
+pub trait StorageLike:
+    Default + Clone + Send + Sync + 'static + Serialize + Debug + TS
+{
+    type Version: Debug + Clone + Send + Sync + 'static + Serialize + DeserializeOwned + TS;
+    type Operation: Debug
+        + Clone
+        + Send
+        + Sync
+        + 'static
+        + Serialize
+        + DeserializeOwned
+        + TS;
+    // type Item: From<Self> + Into<Self>;
 
-
-pub trait StorageLike: Send + Sync + Clone + Debug + 'static + Default {
-    /// The type representing a change/operation to the storage
-    type Operation: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug;
-    
-    /// The type representing the full state that can be sent to clients
-    type Snapshot: Serialize + for<'de> Deserialize<'de> + Send + Sync + Debug;
-
-    /// Current version of the storage, used for reconciliation
-    fn version(&self) -> u64;
-
-    /// Apply an operation and return the new version
-    fn apply_operation(&mut self, op: Self::Operation) -> Result<u64, StorageError>;
-
-    /// Get current state as a snapshot (for new clients or full sync)
-    fn get_snapshot(&self) -> Result<Self::Snapshot, StorageError>;
-
-    /// Initialize from a snapshot (for client-side initialization)
-    fn from_snapshot(snapshot: Self::Snapshot) -> Result<Self, StorageError>
-    where
-        Self: Sized;
+    fn version(&self) -> Self::Version;
+    fn apply_operation(
+        &mut self,
+        operation: Self::Operation,
+    ) -> Result<Self::Version, StorageError>;
+    fn merge(&mut self, other: &Self) -> Result<(), StorageError>;
+    // fn item(&self) -> Self::Item;
 }
-
-
-
-
-

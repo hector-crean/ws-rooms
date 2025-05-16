@@ -1,32 +1,28 @@
 use futures_util::{
-    stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
 };
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     net::TcpStream,
-    sync::{watch, Mutex}, // Use tokio's Mutex
+    signal::ctrl_c,       // Add this import for handling Ctrl+C
+    sync::{Mutex, watch}, // Use tokio's Mutex
     time::Instant,
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
 };
-use url::Url;
-use uuid;
 
 // Type aliases for clarity
 type WsWriter = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
 type WsReader = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
-
 // Send pings slightly more often than the server expects to hear from us
 const HEARTBEAT_INTERVAL_SECONDS: u64 = 30;
 // Allow ample time for server ping + our pong + network latency
 const HEARTBEAT_TIMEOUT_SECONDS: u64 = 60; // Should match or be slightly > server timeout
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "default_room".to_string());
 
     let client_id = uuid::Uuid::new_v4();
-    let url = format!("ws://127.0.0.1:3000/ws/room/{}", room_id);
+    let url = format!("ws://0.0.0.0:8080/ws/room/{}", room_id);
     tracing::info!(%client_id, %room_id, "Connecting to {}", url);
 
     // --- Connection ---
@@ -62,38 +58,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let last_pong_received = Arc::new(Mutex::new(Some(Instant::now())));
 
     // --- Spawn Tasks ---
-    let heartbeat_handle = tokio::spawn(
-        heartbeat_task(
-            writer.clone(),
-            last_pong_received.clone(),
-            shutdown_rx.clone(),
-            shutdown_tx.clone(),
-            client_id,
-            room_id.clone(),
-        )
-    );
+    let heartbeat_handle = tokio::spawn(heartbeat_task(
+        writer.clone(),
+        last_pong_received.clone(),
+        shutdown_rx.clone(),
+        shutdown_tx.clone(),
+        client_id,
+        room_id.clone(),
+    ));
 
-    let sender_handle = tokio::spawn(
-        sender_task(
-            writer.clone(),
-            shutdown_rx.clone(),
-            shutdown_tx.clone(),
-            client_id,
-            room_id.clone(),
-        )
-    );
+    let sender_handle = tokio::spawn(sender_task(
+        writer.clone(),
+        shutdown_rx.clone(),
+        shutdown_tx.clone(),
+        client_id,
+        room_id.clone(),
+    ));
 
-    let receiver_handle = tokio::spawn(
-        receiver_task(
-            read, // Pass reader ownership
-            last_pong_received,
-            shutdown_rx.clone(),
-            shutdown_tx.clone(), // Pass sender to signal shutdown on close/error
-            client_id,
-            room_id.clone(),
-        )
-    );
+    let receiver_handle = tokio::spawn(receiver_task(
+        read, // Pass reader ownership
+        last_pong_received,
+        shutdown_rx.clone(),
+        shutdown_tx.clone(), // Pass sender to signal shutdown on close/error
+        client_id,
+        room_id.clone(),
+    ));
 
+    // --- Spawn Ctrl+C handler ---
+    let shutdown_tx_ctrlc = shutdown_tx.clone();
+    let client_id_ctrlc = client_id;
+    let room_id_ctrlc = room_id.clone();
+    let ctrl_c_handle = tokio::spawn(async move {
+        if let Err(e) = ctrl_c().await {
+            tracing::error!(%client_id_ctrlc, %room_id_ctrlc, "Failed to listen for Ctrl+C: {}", e);
+            return;
+        }
+        tracing::info!(%client_id_ctrlc, %room_id_ctrlc, "Ctrl+C received, initiating graceful shutdown...");
+        let _ = shutdown_tx_ctrlc.send(true);
+    });
 
     // --- Wait for tasks or shutdown signal ---
     // Wait for any task to finish naturally or signal shutdown
@@ -102,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         result = heartbeat_handle => tracing::info!("Heartbeat task finished: {:?}", result),
         result = sender_handle => tracing::info!("Sender task finished: {:?}", result),
         result = receiver_handle => tracing::info!("Receiver task finished: {:?}", result),
+        result = ctrl_c_handle => tracing::info!("Ctrl+C handler finished: {:?}", result),
         // Also listen for the shutdown signal directly in main
         _ = shutdown_rx_main.changed() => {
             if *shutdown_rx_main.borrow() {
@@ -130,7 +133,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => tracing::warn!("Could not acquire writer lock for closing: {}", e),
     }
 
-
     // Optionally, wait for tasks to fully complete after shutdown signal
     // (though they should exit quickly due to the select loops)
     // let _ = tokio::join!(heartbeat_handle, sender_handle, receiver_handle); // This might hang if a task doesn't exit
@@ -138,9 +140,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Client exiting.");
     Ok(())
 }
-
-
-
 
 async fn heartbeat_task(
     writer: WsWriter,
@@ -207,7 +206,6 @@ async fn heartbeat_task(
     }
     tracing::info!(%client_id, %room_id, "Client Heartbeat task exiting.");
 }
-
 
 // --- Sender Task (Stdin) ---
 async fn sender_task(
