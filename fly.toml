@@ -6,7 +6,8 @@
 app = 'ws-rooms'
 primary_region = 'cdg'
 
-[build]
+[build.args]
+  bin = "server"
 
 [env]
   PORT = '8080'

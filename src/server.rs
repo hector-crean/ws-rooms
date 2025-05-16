@@ -107,8 +107,8 @@ impl App {
             .layer(cors)
             .with_state(self.manager.clone());
 
-        // let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], port));
-        let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
+        let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], port));
+        // let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], port));
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
 
