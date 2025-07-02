@@ -10,20 +10,7 @@ An attempt to replicate the infrastructure of `liveblocks` (https://liveblocks.i
     <img src="https://raw.githubusercontent.com/liveblocks/liveblocks/main/.github/assets/header-wordmark-dark.svg" alt="Liveblocks"   />
   </a>
 </p>
-<p align="center">
-  <a href="https://twitter.com/liveblocks">
-    <img src="https://img.shields.io/badge/liveblocks-message?style=flat&logo=x&color=555&logoColor=fff" alt="X" />
-  </a>
-  <a href="https://liveblocks.io/discord">
-    <img src="https://img.shields.io/discord/913109211746009108?style=flat&label=discord&logo=discord&color=85f&logoColor=fff" alt="Discord" />
-  </a>
-    <a href="https://www.youtube.com/channel/UCDXT5skWxzOorIQrWG5OT2w">
-    <img src="https://img.shields.io/youtube/channel/subscribers/UCDXT5skWxzOorIQrWG5OT2w?style=flat&label=youtube&logo=youtube&color=e14&logoColor=fff" alt="YouTube" />
-  </a>
-  <a href="https://github.com/liveblocks/liveblocks/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/liveblocks/liveblocks?style=flat&label=license&logo=github&color=f80&logoColor=fff" alt="License" />
-  </a>
-</p>
+
 
 
 Liveblocks provides a real-time WebSocket room management system with support for collaborative editing, presence tracking, and shared storage. Clients within a room broadcast via websocket message
