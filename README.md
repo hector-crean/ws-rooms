@@ -1,6 +1,8 @@
 # ws-rooms
 
-An attempt to replicate the infrastructure of `liveblocks` (https://liveblocks.io/docs/platform/websocket-infrastructure)
+An attempt to replicate the infrastructure of `liveblocks` (https://liveblocks.io/docs/platform/websocket-infrastructure). Liveblocks provides a brilliant
+infrastructure for creating collaborative applications in the same vein as Figma, or Google Docs. [Rayon](https://www.rayon.design/) is a useful example of a application which
+has folded Liveblocks deep within its stack.
 
 <p align="center">
   <a href="https://liveblocks.io#gh-light-mode-only">
@@ -11,7 +13,11 @@ An attempt to replicate the infrastructure of `liveblocks` (https://liveblocks.i
   </a>
 </p>
 
+I'd been building a 'figma-esque' application where I'd wrapped a bevy application in a react application. I'd setup bidrectional communication between the 
+rust and typescript 'worlds', but ultimately wanted to interact with the livelocks server form both the rust and typescript side. There is so far only a typescript
+client. I considered using Livekit, but then thought it prudent to 'build it to understand it', so built my own liveblocks server implementation, but in rust.
 
+## Liveblocks Overview
 
 Liveblocks provides a real-time WebSocket room management system with support for collaborative editing, presence tracking, and shared storage. Clients within a room broadcast via websocket message
 their `presence`, which is generally lightweight ephemeral data, such as cursor position. Client can update the central room `storage` via an http post request to the server. The server then informs
