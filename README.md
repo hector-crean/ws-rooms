@@ -2,7 +2,28 @@
 
 An attempt to replicate the infrastructure of `liveblocks` (https://liveblocks.io/docs/platform/websocket-infrastructure)
 
-![Liveblocks](data:image/png;base64,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)
+<p align="center">
+  <a href="https://liveblocks.io#gh-light-mode-only">
+    <img src="https://raw.githubusercontent.com/liveblocks/liveblocks/main/.github/assets/header-wordmark-light.svg" alt="Liveblocks"   />
+  </a>
+  <a href="https://liveblocks.io#gh-dark-mode-only">
+    <img src="https://raw.githubusercontent.com/liveblocks/liveblocks/main/.github/assets/header-wordmark-dark.svg" alt="Liveblocks"   />
+  </a>
+</p>
+<p align="center">
+  <a href="https://twitter.com/liveblocks">
+    <img src="https://img.shields.io/badge/liveblocks-message?style=flat&logo=x&color=555&logoColor=fff" alt="X" />
+  </a>
+  <a href="https://liveblocks.io/discord">
+    <img src="https://img.shields.io/discord/913109211746009108?style=flat&label=discord&logo=discord&color=85f&logoColor=fff" alt="Discord" />
+  </a>
+    <a href="https://www.youtube.com/channel/UCDXT5skWxzOorIQrWG5OT2w">
+    <img src="https://img.shields.io/youtube/channel/subscribers/UCDXT5skWxzOorIQrWG5OT2w?style=flat&label=youtube&logo=youtube&color=e14&logoColor=fff" alt="YouTube" />
+  </a>
+  <a href="https://github.com/liveblocks/liveblocks/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/liveblocks/liveblocks?style=flat&label=license&logo=github&color=f80&logoColor=fff" alt="License" />
+  </a>
+</p>
 
 
 Liveblocks provides a real-time WebSocket room management system with support for collaborative editing, presence tracking, and shared storage. Clients within a room broadcast via websocket message
